@@ -276,7 +276,118 @@ if ~isempty(v_vert) || ~isempty(v_axis) || ~isempty(v_trans)
     end
 end
 
-%% 5. Camera Calibration (K)
+%% 5. Rectification (Metric Rectification of Transversal Plane)
+% Goal: Rectify the plane perpendicular to the cylinder axis.
+% This plane contains v_vert and v_trans, with vanishing line l_inf_perp.
+fprintf('Computing Rectification...\n');
+
+H_R = [];
+img_rect = [];
+
+if ~isempty(l_inf_perp) && ~isempty(v_vert) && ~isempty(v_trans)
+    % --- Step 1: Affine Rectification (map l_inf_perp to [0,0,1]) ---
+    % H_aff maps l_inf_perp (the vanishing line) to the ideal line at infinity.
+    % Theory: If l' = H^(-T) * l, then for l'=[0;0;1], l = H^T * [0;0;1] = 3rd col of H^T = 3rd row of H.
+    % So we need H such that H(3,:) is proportional to l_inf_perp.
+
+    l = l_inf_perp(:); % Ensure column
+    l = l / norm(l(1:2)); % Normalize for numerical stability
+
+    % Construct an affine homography H_aff
+    % H_aff = [1 0 0; 0 1 0; l1 l2 l3] where l_inf_perp = [l1 l2 l3]'
+    H_aff = [1 0 0; 0 1 0; l(1) l(2) l(3)];
+
+    % --- Step 2: Metric Rectification (restore angles) ---
+    % After H_aff, the vanishing points v_vert and v_trans become ideal points (at infinity).
+    % In the affine-rectified image, they define directions.
+    % We use their orthogonality to find the metric correction.
+
+    % Transform vanishing points to affine-rectified space
+    v_vert_aff = H_aff * v_vert(:);
+    v_trans_aff = H_aff * v_trans(:);
+
+    fprintf('v_vert_aff = [%.4f, %.4f, %.4f]\n', v_vert_aff);
+    fprintf('v_trans_aff = [%.4f, %.4f, %.4f]\n', v_trans_aff);
+
+    % These should be ideal points (w ≈ 0). Check and warn if not.
+    if abs(v_vert_aff(3)) > 1e-3 || abs(v_trans_aff(3)) > 1e-3
+        warning('Affine transformation did not map VPs to infinity as expected.');
+    end
+
+    % Extract directions (x, y components only)
+    d1 = v_vert_aff(1:2); d1 = d1 / norm(d1);
+    d2 = v_trans_aff(1:2); d2 = d2 / norm(d2);
+
+    fprintf('d1 = [%.4f, %.4f], d2 = [%.4f, %.4f]\n', d1(1), d1(2), d2(1), d2(2));
+    fprintf('Dot product (should be ~0 for orthogonal dirs): %.6f\n', dot(d1, d2));
+
+    % Orthogonality constraint: d1' * S * d2 = 0, where S = [s1 s2; s2 s3].
+    % We parameterize S symmetrically: s = [s1; s2; s3].
+    % Constraint: s1*d1x*d2x + s2*(d1x*d2y + d1y*d2x) + s3*d1y*d2y = 0
+    %
+    % We have only ONE orthogonality constraint, but S has 3 unknowns (2 DoF up to scale).
+    % Standard fix: Use the Image of Circular Points constraint.
+    % For a simple metric rectification, we can assume the affine distortion is pure scaling:
+    % S = [s 0; 0 1]. This gives: s*d1x*d2x + d1y*d2y = 0 => s = -d1y*d2y / (d1x*d2x).
+    %
+    % If s < 0, it means d1 and d2 are NOT orthogonal in the original scene (or VP error).
+    % In this case, we use a rotation matrix to make them orthogonal.
+
+    denom = d1(1)*d2(1);
+    if abs(denom) > 1e-9
+        s_ratio = -(d1(2)*d2(2)) / denom;
+    else
+        s_ratio = 1;
+        warning('Metric rectification: denominator near zero, using s=1.');
+    end
+
+    fprintf('Computed s_ratio = %.6f\n', s_ratio);
+
+    if s_ratio > 0
+        % Standard case: apply scaling
+        A_metric = [sqrt(s_ratio) 0; 0 1];
+    else
+        % s < 0 means the VPs are not orthogonal in the affine space.
+        % Apply a rotation to align d1 with the y-axis, then scale.
+        % This effectively rotates the image so that v_vert is truly vertical.
+
+        theta = atan2(d1(1), d1(2)); % Angle of d1 from vertical (y-axis)
+        R = [cos(theta) sin(theta); -sin(theta) cos(theta)]; % Rotate d1 to [0; 1]
+
+        % After rotation, recompute d2 and the scaling
+        d2_rot = R * d2;
+
+        % Now d1 is [0; 1], so the orthogonality constraint simplifies:
+        % For d1' * S * d2 = 0 with d1 = [0; 1]: s3 * d2y = 0.
+        % If d2y ≠ 0, we have s3 = 0, which is degenerate.
+        % Better approach: just use the rotation to correct the metric.
+
+        fprintf('Using rotation-based metric correction (theta = %.2f deg).\n', rad2deg(theta));
+        A_metric = R; % Use rotation as the metric correction
+    end
+
+    % The metric homography in the affine-rectified frame is:
+    H_metric = [A_metric, [0;0]; 0 0 1];
+
+    % --- Step 3: Combine and Apply ---
+    H_R = H_metric * H_aff;
+
+    fprintf('Rectification Homography H_R computed.\n');
+    disp(H_R);
+
+    % Apply to image
+    tform = projective2d(H_R');
+    img_rect = imwarp(img, tform, 'OutputView', imref2d(size(img)));
+
+    % Visualize
+    figure(3); clf;
+    subplot(1,2,1); imshow(img); title('Original Image');
+    subplot(1,2,2); imshow(img_rect); title('Rectified Image (Transversal Plane)');
+else
+    warning('Could not compute rectification: Missing l_inf_perp, v_vert, or v_trans.');
+end
+
+%% 6. Camera Calibration (K)
 % Compute matrix K using orthogonality of {v_vert, v_axis, v_trans}.
 % Theory: v_i' * omega * v_j = 0.
 % K depends on four parameters: fx, fy, Uo, Vo (Zero skew).
@@ -286,14 +397,6 @@ end
 fprintf('Computing Calibration Matrix K...\n');
 % TODO: Solve linear system A*x = 0 for omega entries.
 % K = inv(chol(omega));
-
-%% 4. Rectification
-% Find Euclidean rectification mapping H_R for a vertical plane perpendicular to axis.
-% (Using K and vanishing points, or metric properties of l_inf).
-
-fprintf('Computing Rectification...\n');
-% TODO: Construct H_R
-% img_rect = imwarp(img, projective2d(H_R'));
 
 %% 6. 3D Reconstruction
 % 6.1 Back-projection: Ray direction d = K \ [u; v; 1]
