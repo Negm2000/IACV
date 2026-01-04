@@ -209,10 +209,36 @@ if ~isempty(v_vert) || ~isempty(v_axis) || ~isempty(v_trans)
     % Adjust Axis to show image + points with slight padding
     x_min = min(all_pts(:,1)); x_max = max(all_pts(:,1));
     y_min = min(all_pts(:,2)); y_max = max(all_pts(:,2));
-    pad_x = (x_max - x_min) * 0.05;
-    pad_y = (y_max - y_min) * 0.05;
-    axis([x_min-pad_x, x_max+pad_x, y_min-pad_y, y_max+pad_y]);
-    grid on;
+    pad_x = abs(x_max - x_min) * 0.1 + 100; % Larger padding
+    pad_y = abs(y_max - y_min) * 0.1 + 100;
+    curr_axis = [x_min-pad_x, x_max+pad_x, y_min-pad_y, y_max+pad_y];
+
+    % --- FIX: Ensure axis is visible and grid is on top ---
+    set(gca, 'Visible', 'on'); % Show coordinates and axis lines
+    axis(curr_axis);
+    set(gca, 'Layer', 'top');  % Draw grid OVER features if they overlap
+    grid on; grid minor;
+    set(gca, 'Color', [0.9 0.9 0.9]); % Grey background for the "infinite" space
+
+    % --- Vanishing Line l_inf_perp ---
+    if ~isempty(l_inf_perp)
+        % Draw the line across the current axis
+        % Line eq: ax + by + c = 0
+        a = l_inf_perp(1); b = l_inf_perp(2); c = l_inf_perp(3);
+
+        % Sample two points at the edge of the current x-limits
+        xl = [curr_axis(1), curr_axis(2)];
+        if abs(b) > 1e-9
+            yl = -(a*xl + c)/b;
+            plot(xl, yl, 'b-', 'LineWidth', 2.5);
+            text(xl(2), yl(2), '  l_{\infty\perp}', 'Color', 'b', 'FontSize', 14, 'FontWeight', 'bold');
+        else
+            % Vertical line case
+            x_vert = -c/a;
+            plot([x_vert, x_vert], [curr_axis(3), curr_axis(4)], 'b-', 'LineWidth', 2.5);
+            text(x_vert, curr_axis(4), '  l_{\infty\perp}', 'Color', 'b', 'FontSize', 14, 'FontWeight', 'bold');
+        end
+    end
 end
 
 %% 5. Camera Calibration (K)
