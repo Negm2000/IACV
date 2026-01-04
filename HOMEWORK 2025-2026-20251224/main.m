@@ -177,6 +177,15 @@ if ~isempty(v_vert) || ~isempty(v_axis) || ~isempty(v_trans)
         for i=1:length(lines_v)
             mid = (lines_v(i).p1 + lines_v(i).p2) / 2;
             plot([mid(1), vp(1)], [mid(2), vp(2)], 'k:', 'LineWidth', 0.5);
+            % Intersect with l_inf_perp (v_vert is already on it, but for consistency)
+            if ~isempty(l_inf_perp)
+                L = cross([lines_v(i).p1 1], [lines_v(i).p2 1]);
+                pt_inf = cross(L, l_inf_perp);
+                if abs(pt_inf(3)) > 1e-9
+                    pt_inf = pt_inf(1:2)/pt_inf(3); all_pts = [all_pts; pt_inf];
+                    plot([mid(1), pt_inf(1)], [mid(2), pt_inf(2)], 'k:', 'LineWidth', 0.5);
+                end
+            end
         end
     end
 
@@ -188,10 +197,27 @@ if ~isempty(v_vert) || ~isempty(v_axis) || ~isempty(v_trans)
         for i=1:length(lines_axis)
             mid = (lines_axis(i).p1 + lines_axis(i).p2) / 2;
             plot([mid(1), vp(1)], [mid(2), vp(2)], 'g:', 'LineWidth', 0.5);
+            % Extend to l_inf_perp
+            if ~isempty(l_inf_perp)
+                L = cross([lines_axis(i).p1 1], [lines_axis(i).p2 1]);
+                pt_inf = cross(L, l_inf_perp);
+                if abs(pt_inf(3)) > 1e-9
+                    pt_inf = pt_inf(1:2)/pt_inf(3); all_pts = [all_pts; pt_inf];
+                    plot([mid(1), pt_inf(1)], [mid(2), pt_inf(2)], 'g:', 'LineWidth', 0.5);
+                end
+            end
         end
         if ~isempty(line_apical)
             mid = (line_apical.p1 + line_apical.p2) / 2;
             plot([mid(1), vp(1)], [mid(2), vp(2)], 'y:', 'LineWidth', 0.8);
+            if ~isempty(l_inf_perp)
+                L = cross([line_apical.p1 1], [line_apical.p2 1]);
+                pt_inf = cross(L, l_inf_perp);
+                if abs(pt_inf(3)) > 1e-9
+                    pt_inf = pt_inf(1:2)/pt_inf(3); all_pts = [all_pts; pt_inf];
+                    plot([mid(1), pt_inf(1)], [mid(2), pt_inf(2)], 'y:', 'LineWidth', 0.8);
+                end
+            end
         end
     end
 
@@ -203,6 +229,15 @@ if ~isempty(v_vert) || ~isempty(v_axis) || ~isempty(v_trans)
         for i=1:length(lines_trans)
             mid = (lines_trans(i).p1 + lines_trans(i).p2) / 2;
             plot([mid(1), vp(1)], [mid(2), vp(2)], 'w:', 'LineWidth', 0.5);
+            % Extend to l_inf_perp
+            if ~isempty(l_inf_perp)
+                L = cross([lines_trans(i).p1 1], [lines_trans(i).p2 1]);
+                pt_inf = cross(L, l_inf_perp);
+                if abs(pt_inf(3)) > 1e-9
+                    pt_inf = pt_inf(1:2)/pt_inf(3); all_pts = [all_pts; pt_inf];
+                    plot([mid(1), pt_inf(1)], [mid(2), pt_inf(2)], 'w:', 'LineWidth', 0.5);
+                end
+            end
         end
     end
 
