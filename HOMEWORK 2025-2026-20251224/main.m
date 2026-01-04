@@ -12,8 +12,8 @@ featureFile = 'features_fixed.mat';
 %% 1. Load Image
 if exist(imageFile, 'file')
     img = imread(imageFile);
-    figure(1); imshow(img); title('Input Image: San Maurizio');
-    hold on;
+    % figure(1); imshow(img); title('Input Image: San Maurizio');
+    % hold on;
 else
     error('Image file %s not found. Please make sure it is in the current directory.', imageFile);
 end
@@ -40,57 +40,63 @@ else
     fprintf('No feature file found. Starting fresh.\n');
 end
 
-% 2. Check for missing pieces and ask ONLY for what is missing or if re-pick is desired
-choice = questdlg('How would you like to proceed?', 'Feature Extraction', 'Continue/Refine Missing', 'Start Over (Clear All)', 'Continue/Refine Missing');
-if strcmp(choice, 'Start Over (Clear All)')
-    lines_v = []; lines_axis = []; line_apical = []; lines_trans = [];
-    arcs_A = {}; arcs_B = {};
-    fprintf('Selection cleared. Starting fresh.\n');
+% 2. Fast Re-pick Selection
+repickList = [];
+if exist(featureFile, 'file')
+    prompt = {['Select features to RE-PICK (type numbers e.g. "1 3 5" or leave empty to KEEP ALL):', newline, ...
+        '1. Vertical (Black)', newline, ...
+        '2. Axis-Parallel (Green)', newline, ...
+        '3. Apical (Yellow)', newline, ...
+        '4. Transversal (White)', newline, ...
+        '5. Arcs Family A (Cyan)', newline, ...
+        '6. Arcs Family B (Magenta)']};
+    answer = inputdlg(prompt, 'Refine Features', [1 100]);
+
+    if ~isempty(answer) && ~isempty(answer{1})
+        repickList = str2num(answer{1}); % Parse string like "1 3 5" to [1 3 5]
+    end
 end
 
-% Helper function for confirmation
-confirm_keep = @(name, var) ~isempty(var) && strcmp(questdlg(sprintf('%s features found. Keep them?', name), 'Review Selection', 'Keep', 'Re-pick', 'Keep'), 'Keep');
-
-% --- Vertical Lines (Black) ---
-if ~confirm_keep('Vertical', lines_v)
-    fprintf('1. Select VERTICAL lines (Black in instructions).\n');
+% --- Vertical Lines ---
+if isempty(lines_v) || ismember(1, repickList)
+    fprintf('1. Select VERTICAL lines (Black).\n');
     lines_v = select_lines(img, 'Select Vertical Lines (Black). Enter to finish.', 'k');
     needs_save = true;
 end
 
-% --- Axis Parallel Lines (Green) ---
-if ~confirm_keep('Axis-Parallel', lines_axis)
-    fprintf('2. Select AXIS-PARALLEL lines (Green in instructions).\n');
+% --- Axis Parallel Lines ---
+if isempty(lines_axis) || ismember(2, repickList)
+    fprintf('2. Select AXIS-PARALLEL lines (Green).\n');
     lines_axis = select_lines(img, 'Select Axis-Parallel Lines (Green). Enter to finish.', 'g');
     needs_save = true;
 end
 
-% --- Apical Line (Yellow) ---
-if ~confirm_keep('Apical', line_apical)
-    fprintf('3. Select THE APICAL line (Yellow in instructions).\n');
+% --- Apical Line ---
+if isempty(line_apical) || ismember(3, repickList)
+    fprintf('3. Select THE APICAL line (Yellow).\n');
     temp_apical = select_lines(img, 'Select THE Apical Line (Yellow). Select ONE and Enter.', 'y');
     if ~isempty(temp_apical), line_apical = temp_apical(1); end
     needs_save = true;
 end
 
-% --- Transversal Lines (White) ---
-if ~confirm_keep('Transversal', lines_trans)
-    fprintf('4. Select TRANSVERSAL lines (White in instructions).\n');
+% --- Transversal Lines ---
+if isempty(lines_trans) || ismember(4, repickList)
+    fprintf('4. Select TRANSVERSAL lines (White).\n');
     lines_trans = select_lines(img, 'Select Transversal Lines (White). Enter to finish.', 'w');
     needs_save = true;
 end
 
-% --- Arcs Family A (Cyan) ---
-if ~confirm_keep('Arcs Family A', arcs_A)
+% --- Arcs Family A ---
+if isempty(arcs_A) || ismember(5, repickList)
     fprintf('5. Select points for DIAGONAL ARCS (Family A - Cyan).\n');
-    arcs_A = select_arcs(img, 'Select Family A Arcs (Up-Right /). Enter on empty for next Step');
+    arcs_A = select_arcs(img, 'Select Family A Arcs (Up-Right /). Enter on empty to Finish');
     needs_save = true;
 end
 
-% --- Arcs Family B (Magenta) ---
-if ~confirm_keep('Arcs Family B', arcs_B)
+% --- Arcs Family B ---
+if isempty(arcs_B) || ismember(6, repickList)
     fprintf('6. Select points for DIAGONAL ARCS (Family B - Magenta).\n');
-    arcs_B = select_arcs(img, 'Select Family B Arcs (Up-Left \). Enter twice to finish.');
+    arcs_B = select_arcs(img, 'Select Family B Arcs (Up-Left \). Enter twice to Finish.');
     needs_save = true;
 end
 
@@ -126,7 +132,6 @@ else
 end
 
 % --- v_axis (Green + Yellow Combined) ---
-% Incorporating the yellow apical line improves accuracy significantly.
 lines_hom = {};
 for i=1:length(lines_axis), lines_hom{end+1} = get_line(lines_axis(i).p1, lines_axis(i).p2); end
 if ~isempty(line_apical), lines_hom{end+1} = get_line(line_apical.p1, line_apical.p2); end
@@ -157,12 +162,57 @@ else
     l_inf_perp = [];
 end
 
-% Visualize vanishing points on special figure
+% Visualize vanishing points and line extensions
 if ~isempty(v_vert) || ~isempty(v_axis) || ~isempty(v_trans)
-    figure(2); imshow(img); title('Vanishing Points Visualization'); hold on;
-    if ~isempty(v_vert), plot(v_vert(1)/v_vert(3), v_vert(2)/v_vert(3), 'ko', 'MarkerSize', 15, 'LineWidth', 2); end
-    if ~isempty(v_axis), plot(v_axis(1)/v_axis(3), v_axis(2)/v_axis(3), 'go', 'MarkerSize', 15, 'LineWidth', 2); end
-    if ~isempty(v_trans), plot(v_trans(1)/v_trans(3), v_trans(2)/v_trans(3), 'wo', 'MarkerSize', 15, 'LineWidth', 2); end
+    figure(2); clf; imshow(img); title('Vanishing Points & Line Extensions'); hold on;
+
+    % Plotting limits calculation
+    all_pts = [1, 1; cols, rows]; % Start with image corners
+
+    % --- v_vert (Black) ---
+    if ~isempty(v_vert) && abs(v_vert(3)) > 1e-9
+        vp = v_vert(1:2)/v_vert(3); all_pts = [all_pts; vp];
+        plot(vp(1), vp(2), 'ko', 'MarkerSize', 12, 'LineWidth', 2);
+        text(vp(1), vp(2), '  v_{vert}', 'Color', 'k', 'FontSize', 10, 'FontWeight', 'bold');
+        for i=1:length(lines_v)
+            mid = (lines_v(i).p1 + lines_v(i).p2) / 2;
+            plot([mid(1), vp(1)], [mid(2), vp(2)], 'k:', 'LineWidth', 0.5);
+        end
+    end
+
+    % --- v_axis (Green) ---
+    if ~isempty(v_axis) && abs(v_axis(3)) > 1e-9
+        vp = v_axis(1:2)/v_axis(3); all_pts = [all_pts; vp];
+        plot(vp(1), vp(2), 'go', 'MarkerSize', 12, 'LineWidth', 2);
+        text(vp(1), vp(2), '  v_{axis}', 'Color', 'g', 'FontSize', 10, 'FontWeight', 'bold');
+        for i=1:length(lines_axis)
+            mid = (lines_axis(i).p1 + lines_axis(i).p2) / 2;
+            plot([mid(1), vp(1)], [mid(2), vp(2)], 'g:', 'LineWidth', 0.5);
+        end
+        if ~isempty(line_apical)
+            mid = (line_apical.p1 + line_apical.p2) / 2;
+            plot([mid(1), vp(1)], [mid(2), vp(2)], 'y:', 'LineWidth', 0.8);
+        end
+    end
+
+    % --- v_trans (White) ---
+    if ~isempty(v_trans) && abs(v_trans(3)) > 1e-9
+        vp = v_trans(1:2)/v_trans(3); all_pts = [all_pts; vp];
+        plot(vp(1), vp(2), 'ro', 'MarkerSize', 12, 'LineWidth', 2); % Red for contrast on white
+        text(vp(1), vp(2), '  v_{trans}', 'Color', [0.8 0 0], 'FontSize', 10, 'FontWeight', 'bold');
+        for i=1:length(lines_trans)
+            mid = (lines_trans(i).p1 + lines_trans(i).p2) / 2;
+            plot([mid(1), vp(1)], [mid(2), vp(2)], 'w:', 'LineWidth', 0.5);
+        end
+    end
+
+    % Adjust Axis to show image + points with slight padding
+    x_min = min(all_pts(:,1)); x_max = max(all_pts(:,1));
+    y_min = min(all_pts(:,2)); y_max = max(all_pts(:,2));
+    pad_x = (x_max - x_min) * 0.05;
+    pad_y = (y_max - y_min) * 0.05;
+    axis([x_min-pad_x, x_max+pad_x, y_min-pad_y, y_max+pad_y]);
+    grid on;
 end
 
 %% 5. Camera Calibration (K)
