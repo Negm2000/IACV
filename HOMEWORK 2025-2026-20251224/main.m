@@ -20,151 +20,140 @@ end
 
 [rows, cols, ~] = size(img);
 
-%% 2. Feature Extraction (Lines and Points)
-% We need to extract:
-% - Vertical lines (Black): giving v_vert
-% - Axis-parallel lines (Green): generic parallel lines, giving v_axis
-% - Apical line (Yellow): specifically connects highest nodal points N_ii
-% - Transversal lines (White): connecting symmetric nodal points, giving v_trans
-% - Points on diagonal arcs (for 3D reconstruction)
+%% 2. Feature Extraction (Smart Loading Version)
+% This section checks what you HAVE vs what you NEED.
+% Initialize empty/default values
+if ~exist('lines_v', 'var'), lines_v = []; end
+if ~exist('lines_axis', 'var'), lines_axis = []; end
+if ~exist('line_apical', 'var'), line_apical = []; end
+if ~exist('lines_trans', 'var'), lines_trans = []; end
+if ~exist('arcs_A', 'var'), arcs_A = {}; end
+if ~exist('arcs_B', 'var'), arcs_B = {}; end
 
+needs_save = false;
+
+% 1. Try to load existing data
 if exist(featureFile, 'file')
-    fprintf('Loading features from %s...\n', featureFile);
+    fprintf('Loading existing features from %s...\n', featureFile);
     load(featureFile);
-
-    % Visualize loaded features to verify
-    figure(1); imshow(img); title('Loaded Features'); hold on;
-    % Plot Vertical Lines (Black)
-    if exist('lines_v', 'var')
-        for i = 1:length(lines_v)
-            plot([lines_v(i).p1(1), lines_v(i).p2(1)], [lines_v(i).p1(2), lines_v(i).p2(2)], 'k-', 'LineWidth', 2);
-        end
-    end
-    % Plot Axis-Parallel Lines (Green)
-    if exist('lines_axis', 'var')
-        for i = 1:length(lines_axis)
-            plot([lines_axis(i).p1(1), lines_axis(i).p2(1)], [lines_axis(i).p1(2), lines_axis(i).p2(2)], 'g-', 'LineWidth', 2);
-        end
-    end
-    % Plot Apical Line (Yellow)
-    if exist('line_apical', 'var') && ~isempty(line_apical)
-        plot([line_apical.p1(1), line_apical.p2(1)], [line_apical.p1(2), line_apical.p2(2)], 'y-', 'LineWidth', 3);
-    end
-    % Plot Transversal Lines (White)
-    if exist('lines_trans', 'var')
-        for i = 1:length(lines_trans)
-            plot([lines_trans(i).p1(1), lines_trans(i).p2(1)], [lines_trans(i).p1(2), lines_trans(i).p2(2)], 'w-', 'LineWidth', 2);
-        end
-    end
-    % Plot Arcs (Points)
-    if exist('arcs_A', 'var')
-        colors = {'r.', 'm.', 'c.'};
-        for i = 1:length(arcs_A)
-            pts = arcs_A{i};
-            plot(pts(:,1), pts(:,2), colors{mod(i-1, length(colors))+1}, 'MarkerSize', 10);
-        end
-    end
-
 else
-    fprintf('Feature file not found. Starting manual extraction...\n');
-
-    fprintf('1. Select VERTICAL lines (Black in instructions).\n');
-    lines_v = select_lines(img, 'Select Vertical Lines (Black). Press Enter when done.', 'k');
-
-    fprintf('2. Select AXIS-PARALLEL lines (Green in instructions).\n');
-    lines_axis = select_lines(img, 'Select Axis-Parallel Lines (Green). Press Enter when done.', 'g');
-
-    fprintf('3. Select THE APICAL line (Yellow in instructions).\n');
-    temp_apical = select_lines(img, 'Select THE Apical Line (Yellow). Select ONE and press Enter.', 'y');
-    if ~isempty(temp_apical)
-        line_apical = temp_apical(1);
-    else
-        line_apical = [];
-    end
-
-    fprintf('4. Select TRANSVERSAL lines (White in instructions).\n');
-    lines_trans = select_lines(img, 'Select Transversal Lines (White). Press Enter when done.', 'w');
-
-    fprintf('5. Select points for DIAGONAL ARCS.\n');
-    arcs_A = select_arcs(img, 'Select Points for Diagonal Arcs. Press Enter after each arc.');
-
-    save(featureFile, 'lines_v', 'lines_axis', 'line_apical', 'lines_trans', 'arcs_A');
-    fprintf('Features saved to %s\n', featureFile);
+    fprintf('No feature file found. Starting fresh.\n');
 end
 
-%% 3. Vanishing Points and Vanishing Line
-% 3.1 Compute Orthogonal Vanishing Points: v_vert, v_axis, v_trans
-% 3.2 Find vanishing line l_inf of planes perpendicular to cylinder axis
-%     (Planes perpendicular to axis are spanned by v_vert and v_trans)
+% 2. Check for missing pieces and ask ONLY for what is missing
 
+% --- Vertical Lines (Black) ---
+if isempty(lines_v)
+    fprintf('1. Select VERTICAL lines (Black in instructions).\n');
+    lines_v = select_lines(img, 'Select Vertical Lines (Black). Enter to finish.', 'k');
+    needs_save = true;
+end
+
+% --- Axis Parallel Lines (Green) ---
+if isempty(lines_axis)
+    fprintf('2. Select AXIS-PARALLEL lines (Green in instructions).\n');
+    lines_axis = select_lines(img, 'Select Axis-Parallel Lines (Green). Enter to finish.', 'g');
+    needs_save = true;
+end
+
+% --- Apical Line (Yellow) ---
+if isempty(line_apical)
+    fprintf('3. Select THE APICAL line (Yellow in instructions).\n');
+    temp_apical = select_lines(img, 'Select THE Apical Line (Yellow). Select ONE and Enter.', 'y');
+    if ~isempty(temp_apical), line_apical = temp_apical(1); end
+    needs_save = true;
+end
+
+% --- Transversal Lines (White) ---
+if isempty(lines_trans)
+    fprintf('4. Select TRANSVERSAL lines (White in instructions).\n');
+    lines_trans = select_lines(img, 'Select Transversal Lines (White). Enter to finish.', 'w');
+    needs_save = true;
+end
+
+% --- Arcs Family A (Cyan) ---
+if isempty(arcs_A)
+    fprintf('5. Select points for DIAGONAL ARCS (Family A - Cyan).\n');
+    arcs_A = select_arcs(img, 'Select Family A Arcs (Up-Right /). Enter on empty for next Step');
+    needs_save = true;
+end
+
+% --- Arcs Family B (Magenta) ---
+if isempty(arcs_B)
+    fprintf('6. Select points for DIAGONAL ARCS (Family B - Magenta).\n');
+    arcs_B = select_arcs(img, 'Select Family B Arcs (Up-Left \). Enter twice to finish.');
+    needs_save = true;
+end
+
+% 3. Save if we added anything new
+if needs_save
+    save(featureFile, 'lines_v', 'lines_axis', 'line_apical', 'lines_trans', 'arcs_A', 'arcs_B');
+    fprintf('Features updated and saved to %s\n', featureFile);
+end
+
+% Visualizer of everything
+figure(1); imshow(img); title('All Features Loaded'); hold on;
+if ~isempty(lines_v), for i=1:length(lines_v), plot([lines_v(i).p1(1) lines_v(i).p2(1)], [lines_v(i).p1(2) lines_v(i).p2(2)], 'k-', 'LineWidth', 2); end; end
+if ~isempty(lines_axis), for i=1:length(lines_axis), plot([lines_axis(i).p1(1) lines_axis(i).p2(1)], [lines_axis(i).p1(2) lines_axis(i).p2(2)], 'g-', 'LineWidth', 2); end; end
+if ~isempty(line_apical), plot([line_apical.p1(1) line_apical.p2(1)], [line_apical.p1(2) line_apical.p2(2)], 'y-', 'LineWidth', 3); end
+if ~isempty(lines_trans), for i=1:length(lines_trans), plot([lines_trans(i).p1(1) lines_trans(i).p2(1)], [lines_trans(i).p1(2) lines_trans(i).p2(2)], 'w-', 'LineWidth', 2); end; end
+for i=1:length(arcs_A), pts=arcs_A{i}; plot(pts(:,1), pts(:,2), 'c.-', 'MarkerSize', 10); end
+for i=1:length(arcs_B), pts=arcs_B{i}; plot(pts(:,1), pts(:,2), 'm.-', 'MarkerSize', 10); end
+
+%% 3. Vanishing Points and Vanishing Line
 fprintf('Computing Vanishing Points...\n');
 
 % Helper function to get homogeneous line from two points
 get_line = @(p1, p2) cross([p1, 1], [p2, 1])';
 
-% Compute v_vert from vertical lines
-if exist('lines_v', 'var') && length(lines_v) >= 2
-    lines_v_hom = cell(1, length(lines_v));
-    for idx = 1:length(lines_v)
-        lines_v_hom{idx} = get_line(lines_v(idx).p1, lines_v(idx).p2);
-    end
-    v_vert = compute_vanishing_point(lines_v_hom);
-    fprintf('v_vert = [%.4f, %.4f, %.4f]\n', v_vert);
+% --- v_vert (Black) ---
+if ~isempty(lines_v)
+    lines_hom = {};
+    for i=1:length(lines_v), lines_hom{i} = get_line(lines_v(i).p1, lines_v(i).p2); end
+    v_vert = compute_vanishing_point(lines_hom);
+    fprintf('v_vert  = [%.4f, %.4f, %.4f]\n', v_vert);
 else
-    warning('Not enough vertical lines to compute v_vert.');
     v_vert = [];
 end
 
-% Compute v_axis from axis-parallel lines (Green)
-if exist('lines_axis', 'var') && length(lines_axis) >= 2
-    lines_axis_hom = cell(1, length(lines_axis));
-    for idx = 1:length(lines_axis)
-        lines_axis_hom{idx} = get_line(lines_axis(idx).p1, lines_axis(idx).p2);
-    end
-    v_axis = compute_vanishing_point(lines_axis_hom);
-    fprintf('v_axis = [%.4f, %.4f, %.4f]\n', v_axis);
+% --- v_axis (Green + Yellow Combined) ---
+% Incorporating the yellow apical line improves accuracy significantly.
+lines_hom = {};
+for i=1:length(lines_axis), lines_hom{end+1} = get_line(lines_axis(i).p1, lines_axis(i).p2); end
+if ~isempty(line_apical), lines_hom{end+1} = get_line(line_apical.p1, line_apical.p2); end
+
+if length(lines_hom) >= 2
+    v_axis = compute_vanishing_point(lines_hom);
+    fprintf('v_axis  = [%.4f, %.4f, %.4f]\n', v_axis);
 else
-    warning('Not enough axis-parallel lines to compute v_axis.');
     v_axis = [];
 end
 
-% Compute v_trans from transversal lines (White)
-if exist('lines_trans', 'var') && length(lines_trans) >= 2
-    lines_trans_hom = cell(1, length(lines_trans));
-    for idx = 1:length(lines_trans)
-        lines_trans_hom{idx} = get_line(lines_trans(idx).p1, lines_trans(idx).p2);
-    end
-    v_trans = compute_vanishing_point(lines_trans_hom);
+% --- v_trans (White) ---
+if ~isempty(lines_trans)
+    lines_hom = {};
+    for i=1:length(lines_trans), lines_hom{i} = get_line(lines_trans(i).p1, lines_trans(i).p2); end
+    v_trans = compute_vanishing_point(lines_hom);
     fprintf('v_trans = [%.4f, %.4f, %.4f]\n', v_trans);
 else
-    warning('Not enough transversal lines to compute v_trans.');
     v_trans = [];
 end
 
 % Compute Vanishing Line of planes perpendicular to the cylinder axis
-% These planes are spanned by Vertical and Transversal directions
 if ~isempty(v_vert) && ~isempty(v_trans)
     l_inf_perp = cross(v_vert, v_trans);
-    l_inf_perp = l_inf_perp / norm(l_inf_perp(1:2)); % Normalize
+    l_inf_perp = l_inf_perp / norm(l_inf_perp(1:2));
     fprintf('Vanishing line l_inf_perp = [%.4f, %.4f, %.4f]\n', l_inf_perp);
 else
-    warning('Cannot compute l_inf_perp without v_vert and v_trans.');
     l_inf_perp = [];
 end
 
-% Visualize vanishing points on the image
-figure(2); imshow(img); title('Vanishing Points'); hold on;
-if ~isempty(v_vert) && abs(v_vert(3)) > 1e-6
-    plot(v_vert(1)/v_vert(3), v_vert(2)/v_vert(3), 'ko', 'MarkerSize', 15, 'LineWidth', 2);
-    text(v_vert(1)/v_vert(3), v_vert(2)/v_vert(3), ' v_{vert}', 'Color', 'k', 'FontSize', 12);
-end
-if ~isempty(v_axis) && abs(v_axis(3)) > 1e-6
-    plot(v_axis(1)/v_axis(3), v_axis(2)/v_axis(3), 'go', 'MarkerSize', 15, 'LineWidth', 2);
-    text(v_axis(1)/v_axis(3), v_axis(2)/v_axis(3), ' v_{axis}', 'Color', 'g', 'FontSize', 12);
-end
-if ~isempty(v_trans) && abs(v_trans(3)) > 1e-6
-    plot(v_trans(1)/v_trans(3), v_trans(2)/v_trans(3), 'wo', 'MarkerSize', 15, 'LineWidth', 2);
-    text(v_trans(1)/v_trans(3), v_trans(2)/v_trans(3), ' v_{trans}', 'Color', 'w', 'FontSize', 12);
+% Visualize vanishing points on special figure
+if ~isempty(v_vert) || ~isempty(v_axis) || ~isempty(v_trans)
+    figure(2); imshow(img); title('Vanishing Points Visualization'); hold on;
+    if ~isempty(v_vert), plot(v_vert(1)/v_vert(3), v_vert(2)/v_vert(3), 'ko', 'MarkerSize', 15, 'LineWidth', 2); end
+    if ~isempty(v_axis), plot(v_axis(1)/v_axis(3), v_axis(2)/v_axis(3), 'go', 'MarkerSize', 15, 'LineWidth', 2); end
+    if ~isempty(v_trans), plot(v_trans(1)/v_trans(3), v_trans(2)/v_trans(3), 'wo', 'MarkerSize', 15, 'LineWidth', 2); end
 end
 
 %% 5. Camera Calibration (K)
