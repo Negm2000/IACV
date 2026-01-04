@@ -40,24 +40,33 @@ else
     fprintf('No feature file found. Starting fresh.\n');
 end
 
-% 2. Check for missing pieces and ask ONLY for what is missing
+% 2. Check for missing pieces and ask ONLY for what is missing or if re-pick is desired
+choice = questdlg('How would you like to proceed?', 'Feature Extraction', 'Continue/Refine Missing', 'Start Over (Clear All)', 'Continue/Refine Missing');
+if strcmp(choice, 'Start Over (Clear All)')
+    lines_v = []; lines_axis = []; line_apical = []; lines_trans = [];
+    arcs_A = {}; arcs_B = {};
+    fprintf('Selection cleared. Starting fresh.\n');
+end
+
+% Helper function for confirmation
+confirm_keep = @(name, var) ~isempty(var) && strcmp(questdlg(sprintf('%s features found. Keep them?', name), 'Review Selection', 'Keep', 'Re-pick', 'Keep'), 'Keep');
 
 % --- Vertical Lines (Black) ---
-if isempty(lines_v)
+if ~confirm_keep('Vertical', lines_v)
     fprintf('1. Select VERTICAL lines (Black in instructions).\n');
     lines_v = select_lines(img, 'Select Vertical Lines (Black). Enter to finish.', 'k');
     needs_save = true;
 end
 
 % --- Axis Parallel Lines (Green) ---
-if isempty(lines_axis)
+if ~confirm_keep('Axis-Parallel', lines_axis)
     fprintf('2. Select AXIS-PARALLEL lines (Green in instructions).\n');
     lines_axis = select_lines(img, 'Select Axis-Parallel Lines (Green). Enter to finish.', 'g');
     needs_save = true;
 end
 
 % --- Apical Line (Yellow) ---
-if isempty(line_apical)
+if ~confirm_keep('Apical', line_apical)
     fprintf('3. Select THE APICAL line (Yellow in instructions).\n');
     temp_apical = select_lines(img, 'Select THE Apical Line (Yellow). Select ONE and Enter.', 'y');
     if ~isempty(temp_apical), line_apical = temp_apical(1); end
@@ -65,21 +74,21 @@ if isempty(line_apical)
 end
 
 % --- Transversal Lines (White) ---
-if isempty(lines_trans)
+if ~confirm_keep('Transversal', lines_trans)
     fprintf('4. Select TRANSVERSAL lines (White in instructions).\n');
     lines_trans = select_lines(img, 'Select Transversal Lines (White). Enter to finish.', 'w');
     needs_save = true;
 end
 
 % --- Arcs Family A (Cyan) ---
-if isempty(arcs_A)
+if ~confirm_keep('Arcs Family A', arcs_A)
     fprintf('5. Select points for DIAGONAL ARCS (Family A - Cyan).\n');
     arcs_A = select_arcs(img, 'Select Family A Arcs (Up-Right /). Enter on empty for next Step');
     needs_save = true;
 end
 
 % --- Arcs Family B (Magenta) ---
-if isempty(arcs_B)
+if ~confirm_keep('Arcs Family B', arcs_B)
     fprintf('6. Select points for DIAGONAL ARCS (Family B - Magenta).\n');
     arcs_B = select_arcs(img, 'Select Family B Arcs (Up-Left \). Enter twice to finish.');
     needs_save = true;
