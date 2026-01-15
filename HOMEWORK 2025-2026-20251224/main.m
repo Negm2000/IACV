@@ -300,7 +300,6 @@ try
     K_norm = inv(R);
     K_norm = K_norm / K_norm(3,3);
 catch ME
-    warning('Cholesky failed on K_norm: %s', ME.message);
     fprintf('Using eigenvalue decomposition...\n');
     KKt = inv(omega_n);
     KKt = (KKt + KKt') / 2;
@@ -347,52 +346,58 @@ if isempty(l_inf_perp)
     error('Cannot rectify: vanishing line not computed.');
 end
 
-% The homography that maps the vanishing line to infinity
-% H = [1 0 0; 0 1 0; l(1)/l(3) l(2)/l(3) 1]
+% Step 1: Affine rectification - map vanishing line to infinity
 l_norm = l_inf_perp(:) / l_inf_perp(3);
-H_rect = [1, 0, 0; 0, 1, 0; l_norm(1), l_norm(2), 1];
+H_aff = [1, 0, 0; 0, 1, 0; l_norm(1), l_norm(2), 1];
 
-% Determine a robust output view
-% Find which side of the vanishing line has more corners
+% Step 2: Metric rectification - use the known perpendicular directions
+% Transform the vanishing points through H_aff to get their directions at infinity
+v_vert_aff = H_aff * v_vert(:);
+v_trans_aff = H_aff * v_trans(:);
+
+% These are now points at infinity (3rd coord ~0). Their direction is (x, y).
+dir_vert = v_vert_aff(1:2) / norm(v_vert_aff(1:2));
+dir_trans = v_trans_aff(1:2) / norm(v_trans_aff(1:2));
+
+% We want to find S such that:
+%   S * dir_vert = [0; 1]  (vertical lines go up)
+%   S * dir_trans = [1; 0] (transversal lines go right)
+% This is: S * [dir_vert, dir_trans] = [0, 1; 1, 0]
+% So: S = [0, 1; 1, 0] * inv([dir_vert, dir_trans])
+
+M = [dir_vert, dir_trans];
+S_metric = [0, 1; 1, 0] * inv(M);
+
+% Build the full metric correction homography
+H_metric = [S_metric, [0; 0]; 0, 0, 1];
+
+% Combined homography: H_rect = H_metric * H_aff
+H_rect = H_metric * H_aff;
+fprintf('Applied metric correction: vert->vertical, trans->horizontal.\n');
+
 % Determine a robust output view by sampling points across the image
 [xx, yy] = meshgrid(linspace(1, cols, 40), linspace(1, rows, 40));
 pts_grid = [xx(:), yy(:), ones(numel(xx), 1)]';
 
-% Use H_rect to transform them (3rd row is the vanishing line value)
-grid_vals = H_rect(3,:) * pts_grid;
+% Use H_aff row to identify points near vanishing line (H_rect may have different structure now)
+grid_vals = H_aff(3,:) * pts_grid;
 
 % Pick the dominant side of the vanishing line
 side = sign(mean(grid_vals));
 if side == 0, side = 1; end
 
 % Filter: points on the correct side and not too close to the line
-% Points within 15% of the range near the line are avoided to prevent infinite stretching
 v_range = abs(max(grid_vals) - min(grid_vals));
 margin = 0.15 * v_range;
 mask = (sign(grid_vals) == side) & (abs(grid_vals) > margin);
 
-if sum(mask) < 10 % If too few points pass the margin, be less strict
+if sum(mask) < 10
     mask = (sign(grid_vals) == side);
 end
 
 % Transform grid points to rectified space for limit calculation
 pts_trans = H_rect * pts_grid(:, mask);
 pts_trans = pts_trans(1:2, :) ./ pts_trans(3, :);
-
-% Initial auto-rotation to align vertical lines
-if ~isempty(lines_v)
-    p1 = [lines_v(1).p1, 1]'; p2 = [lines_v(1).p2, 1]';
-    q1 = H_rect * p1; q1 = q1(1:2)/q1(3);
-    q2 = H_rect * p2; q2 = q2(1:2)/q2(3);
-    theta = atan2(q2(2)-q1(2), q2(1)-q1(1));
-    rot_angle = -pi/2 - theta;
-    H_rot = [cos(rot_angle), -sin(rot_angle), 0; sin(rot_angle), cos(rot_angle), 0; 0, 0, 1];
-    H_rect = H_rot * H_rect;
-
-    % Update the transformed points for limit calculation
-    pts_trans = H_rot * [pts_trans; ones(1, size(pts_trans, 2))];
-    pts_trans = pts_trans(1:2, :) ./ pts_trans(3, :);
-end
 
 % Find bounding box of visible points in the rotated space
 min_x = min(pts_trans(1,:)); max_x = max(pts_trans(1,:));
@@ -401,6 +406,7 @@ w_rect = max_x - min_x; h_rect_val = max_y - min_y;
 
 % Limit extreme aspect ratios which can happen near the vanishing line
 if h_rect_val > 5 * w_rect, h_rect_val = 5 * w_rect; end
+if w_rect > 5 * h_rect_val, w_rect = 5 * h_rect_val; end
 
 % Final scaling and translation (mapping min_x, min_y to 1, 1)
 target_w = 2000;
@@ -413,20 +419,35 @@ out_size = [ceil(scale * h_rect_val), target_w];
 fprintf('Rectifying view. Points used for limits: %d. Output size: %d x %d\n', sum(mask), out_size(2), out_size(1));
 img_rect = imwarp(img, projective2d(H_final'), 'OutputView', imref2d(out_size));
 
-figure(3); clf; imshow(img_rect); title('Metric Rectified Image');
+figure(3); clf;
+imshow(img_rect);
+title(sprintf('Metric Rectified Image (%dx%d)', out_size(2), out_size(1)), 'FontSize', 14);
 hold on;
+axis([1, out_size(2), 1, out_size(1)]); % Lock axis to output view
+
+% Helper: check if line is at least partially inside the view
+is_in_view = @(p1, p2) all([p1(:); p2(:)] > -500 & [p1(:); p2(:)] < [out_size(2); out_size(1); out_size(2); out_size(1)] + 500);
+
+% Overlay vertical lines in black
 if ~isempty(lines_v)
-    for i = 1:min(5, length(lines_v))
+    for i = 1:length(lines_v)
         p1 = H_final*[lines_v(i).p1 1]'; p1 = p1(1:2)/p1(3);
         p2 = H_final*[lines_v(i).p2 1]'; p2 = p2(1:2)/p2(3);
-        plot([p1(1) p2(1)], [p1(2) p2(2)], 'k-', 'LineWidth', 2);
+        if is_in_view(p1, p2)
+            plot([p1(1) p2(1)], [p1(2) p2(2)], 'k-', 'LineWidth', 2.5);
+        end
     end
 end
+
+% Overlay transversal lines in white with black outline for visibility
 if ~isempty(lines_trans)
-    for i = 1:min(5, length(lines_trans))
+    for i = 1:length(lines_trans)
         p1 = H_final*[lines_trans(i).p1 1]'; p1 = p1(1:2)/p1(3);
         p2 = H_final*[lines_trans(i).p2 1]'; p2 = p2(1:2)/p2(3);
-        plot([p1(1) p2(1)], [p1(2) p2(2)], 'w-', 'LineWidth', 2);
+        if is_in_view(p1, p2)
+            plot([p1(1) p2(1)], [p1(2) p2(2)], 'k-', 'LineWidth', 4); % black outline
+            plot([p1(1) p2(1)], [p1(2) p2(2)], 'w-', 'LineWidth', 2); % white core
+        end
     end
 end
 
@@ -743,4 +764,52 @@ if abs(vp(3)) > 1e-9
     vp = vp / vp(3);
 end
 vp = vp';
+end
+%% Verification Script
+fprintf('\n=== Verification: Checking Rectified Angles ===\n');
+
+% 1. Check Vertical Lines (Should be 90 degrees wrt X-axis)
+angles_v = [];
+if ~isempty(lines_v)
+    for i = 1:length(lines_v)
+        % Map points to rectified space
+        p1 = H_final * [lines_v(i).p1 1]'; p1 = p1(1:2)/p1(3);
+        p2 = H_final * [lines_v(i).p2 1]'; p2 = p2(1:2)/p2(3);
+
+        % Calculate angle relative to horizontal
+        dx = p2(1) - p1(1);
+        dy = p2(2) - p1(2);
+        angle_deg = atan2d(dy, dx);
+
+        % We expect 90 or -90 (or 270). Take absolute deviation from 90.
+        dev = abs(abs(angle_deg) - 90);
+        angles_v(end+1) = dev;
+    end
+    fprintf('Average deviation of Vertical lines from true vertical: %.2f degrees\n', mean(angles_v));
+end
+
+% 2. Check Transversal Lines (Should be 0 degrees wrt X-axis)
+angles_t = [];
+if ~isempty(lines_trans)
+    for i = 1:length(lines_trans)
+        % Map points to rectified space
+        p1 = H_final * [lines_trans(i).p1 1]'; p1 = p1(1:2)/p1(3);
+        p2 = H_final * [lines_trans(i).p2 1]'; p2 = p2(1:2)/p2(3);
+
+        % Calculate angle relative to horizontal
+        dx = p2(1) - p1(1);
+        dy = p2(2) - p1(2);
+        angle_deg = atan2d(dy, dx);
+
+        % We expect 0 or 180.
+        dev = min(abs(angle_deg), abs(abs(angle_deg)-180));
+        angles_t(end+1) = dev;
+    end
+    fprintf('Average deviation of Transversal lines from true horizontal: %.2f degrees\n', mean(angles_t));
+end
+
+if mean([angles_v, angles_t]) < 2.0
+    fprintf('>> SUCCESS: Rectification looks geometrically valid.\n');
+else
+    fprintf('>> WARNING: Rectification might be skewed. Check V_trans and V_vert selection.\n');
 end
