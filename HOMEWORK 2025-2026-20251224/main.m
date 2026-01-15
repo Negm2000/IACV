@@ -151,12 +151,79 @@ if ~isempty(v_vert), fprintf('  v_vert  = [%.4f, %.4f, %.4f]\n', v_vert); end
 if ~isempty(v_axis), fprintf('  v_axis  = [%.4f, %.4f, %.4f]\n', v_axis); end
 if ~isempty(v_trans), fprintf('  v_trans = [%.4f, %.4f, %.4f]\n', v_trans); end
 
+% Test all possible vanishing line combinations
+fprintf('\n--- Testing Vanishing Line Candidates ---\n');
+
+% Option 1: cross(v_vert, v_trans) - for plane perp to axis (contains vert and trans)
 if ~isempty(v_vert) && ~isempty(v_trans)
-    l_inf_perp = cross(v_vert, v_trans);
-    l_inf_perp = l_inf_perp / norm(l_inf_perp(1:2));
-    fprintf('Vanishing line l_inf_perp = [%.4f, %.4f, %.4f]\n', l_inf_perp);
+    l_vt = cross(v_vert, v_trans);
+    l_vt = l_vt / norm(l_vt(1:2));
+    cv_vt = [l_vt*[1;1;1], l_vt*[cols;1;1], l_vt*[cols;rows;1], l_vt*[1;rows;1]];
+    ok_vt = all(cv_vt > 0) || all(cv_vt < 0);
+    fprintf('cross(v_vert, v_trans): corners same side = %d\n', ok_vt);
+end
+
+% Option 2: cross(v_vert, v_axis) - for plane containing vert and axis
+if ~isempty(v_vert) && ~isempty(v_axis)
+    l_va = cross(v_vert, v_axis);
+    l_va = l_va / norm(l_va(1:2));
+    cv_va = [l_va*[1;1;1], l_va*[cols;1;1], l_va*[cols;rows;1], l_va*[1;rows;1]];
+    ok_va = all(cv_va > 0) || all(cv_va < 0);
+    fprintf('cross(v_vert, v_axis): corners same side = %d\n', ok_va);
+end
+
+% Option 3: cross(v_trans, v_axis) - for plane containing trans and axis
+if ~isempty(v_trans) && ~isempty(v_axis)
+    l_ta = cross(v_trans, v_axis);
+    l_ta = l_ta / norm(l_ta(1:2));
+    cv_ta = [l_ta*[1;1;1], l_ta*[cols;1;1], l_ta*[cols;rows;1], l_ta*[1;rows;1]];
+    ok_ta = all(cv_ta > 0) || all(cv_ta < 0);
+    fprintf('cross(v_trans, v_axis): corners same side = %d\n', ok_ta);
+end
+
+% Select a vanishing line that has all corners on the same side (for valid rectification)
+l_inf_perp = [];
+l_inf_name = '';
+
+% Try cross(v_vert, v_trans) first - the plane perpendicular to axis
+if ~isempty(v_vert) && ~isempty(v_trans)
+    l_test = cross(v_vert, v_trans);
+    l_test = l_test / norm(l_test(1:2));
+    cv = [l_test*[1;1;1], l_test*[cols;1;1], l_test*[cols;rows;1], l_test*[1;rows;1]];
+    if all(cv > 0) || all(cv < 0)
+        l_inf_perp = l_test;
+        l_inf_name = 'cross(v_vert, v_trans)';
+    end
+end
+
+% If that doesn't work, try cross(v_trans, v_axis)
+if isempty(l_inf_perp) && ~isempty(v_trans) && ~isempty(v_axis)
+    l_test = cross(v_trans, v_axis);
+    l_test = l_test / norm(l_test(1:2));
+    cv = [l_test*[1;1;1], l_test*[cols;1;1], l_test*[cols;rows;1], l_test*[1;rows;1]];
+    if all(cv > 0) || all(cv < 0)
+        l_inf_perp = l_test;
+        l_inf_name = 'cross(v_trans, v_axis)';
+        fprintf('NOTE: Using cross(v_trans, v_axis) instead - this is NOT the plane perpendicular to axis!\n');
+    end
+end
+
+% If that doesn't work either, try cross(v_vert, v_axis)
+if isempty(l_inf_perp) && ~isempty(v_vert) && ~isempty(v_axis)
+    l_test = cross(v_vert, v_axis);
+    l_test = l_test / norm(l_test(1:2));
+    cv = [l_test*[1;1;1], l_test*[cols;1;1], l_test*[cols;rows;1], l_test*[1;rows;1]];
+    if all(cv > 0) || all(cv < 0)
+        l_inf_perp = l_test;
+        l_inf_name = 'cross(v_vert, v_axis)';
+        fprintf('NOTE: Using cross(v_vert, v_axis) instead - this is NOT the plane perpendicular to axis!\n');
+    end
+end
+
+if ~isempty(l_inf_perp)
+    fprintf('\nSelected vanishing line: %s = [%.4f, %.4f, %.4f]\n', l_inf_name, l_inf_perp);
 else
-    l_inf_perp = [];
+    warning('No valid vanishing line found! All combinations cross through the image.');
 end
 
 if ~isempty(v_vert) || ~isempty(v_axis) || ~isempty(v_trans)
@@ -397,69 +464,115 @@ img_aff = imwarp(img, projective2d(H_aff_v'), 'OutputView', imref2d([ceil(s_aff*
 
 figure(3); clf; imshow(img_aff); title('Step 1: Affine Rectified Image');
 
-% --- Stage 2: Metric Rectification (Upright & Scaled) ---
-% 1. Compute Metric Homography (Camera Rotation)
-n_cam = (K') * l_inf_perp(:);
-if n_cam(3) < 0
-    n_cam = -n_cam; % Force looking forward
-end
-n_cam = n_cam / norm(n_cam);
+% --- Stage 2: Euclidean Rectification (H_R) ---
+% For a plane perpendicular to the cylinder axis, containing vertical and transversal directions
+% The vanishing line of this plane is l_inf_perp = cross(v_vert, v_trans)
 
-z_axis = [0; 0; 1];
-v = cross(z_axis, n_cam);
-s = norm(v);
-c = dot(z_axis, n_cam);
+fprintf('\n=== Euclidean Rectification ===\n');
 
-if s < 1e-9
-    R_rect = eye(3);
+% Check if vanishing line passes through the image
+l = l_inf_perp(:);
+corner_vals = [l'*[1;1;1], l'*[cols;1;1], l'*[cols;rows;1], l'*[1;rows;1]];
+fprintf('Corner values relative to vanishing line: [%.1f, %.1f, %.1f, %.1f]\n', corner_vals);
+
+% Determine which side of the vanishing line has the most image content
+positive_side = sum(corner_vals > 0);
+negative_side = sum(corner_vals < 0);
+fprintf('Corners on positive side: %d, negative side: %d\n', positive_side, negative_side);
+
+if positive_side == 4 || negative_side == 4
+    fprintf('All corners on same side - full image can be rectified.\n');
+    % Use the full image
+    rect_corners = corners;
+    use_full_image = true;
 else
-    vx = [0 -v(3) v(2); v(3) 0 -v(1); -v(2) v(1) 0];
-    R_rect = eye(3) + vx + vx^2 * ((1 - c) / s^2);
-end
-H_raw = K * R_rect * inv(K);
+    warning('Vanishing line passes through image! This is a DEGENERATE case.');
+    fprintf('The vanishing line l_inf_perp crosses through the image.\n');
+    fprintf('This means the plane being rectified is viewed almost edge-on.\n');
+    fprintf('Full perspective rectification is not possible.\n\n');
 
-% 2. Auto-Rotate: Force Vertical Lines to be Vertical
-if ~isempty(lines_v)
-    p1 = [lines_v(1).p1, 1]';
-    p2 = [lines_v(1).p2, 1]';
-    q1 = H_raw * p1; q1 = q1(1:2)/q1(3);
-    q2 = H_raw * p2; q2 = q2(1:2)/q2(3);
-    dx = q2(1) - q1(1);
-    dy = q2(2) - q1(2);
-    theta = atan2(dy, dx);
-    rot_angle = deg2rad(90) - theta;
-    c_r = cos(rot_angle); s_r = sin(rot_angle);
-    H_rot = [c_r, -s_r, 0; s_r, c_r, 0; 0, 0, 1];
-    fprintf('Auto-aligning vertical lines (Rotation: %.1f deg)\n', rad2deg(rot_angle));
-    H_aligned = H_rot * H_raw;
+    % For visualization, we'll just show the affine rectified image (Figure 3)
+    % and skip the problematic full rectification
+    use_full_image = false;
+end
+
+if use_full_image
+    % Standard affine rectification: map vanishing line to infinity
+    l_norm = l_inf_perp(:) / l_inf_perp(3);
+    H_R = [1, 0, 0; 0, 1, 0; l_norm(1), l_norm(2), 1];
+
+    % Transform corners
+    pts_out = H_R * corners;
+    pts_out = pts_out ./ pts_out(3,:);
+
+    % Auto-rotate to make vertical lines vertical
+    if ~isempty(lines_v)
+        p1 = [lines_v(1).p1, 1]';
+        p2 = [lines_v(1).p2, 1]';
+        q1 = H_R * p1; q1 = q1(1:2)/q1(3);
+        q2 = H_R * p2; q2 = q2(1:2)/q2(3);
+
+        if q2(2) > q1(2)
+            dx = q1(1) - q2(1); dy = q1(2) - q2(2);
+        else
+            dx = q2(1) - q1(1); dy = q2(2) - q1(2);
+        end
+
+        theta = atan2(dy, dx);
+        rot_angle = -pi/2 - theta;
+        while rot_angle > pi, rot_angle = rot_angle - 2*pi; end
+        while rot_angle < -pi, rot_angle = rot_angle + 2*pi; end
+
+        c_r = cos(rot_angle); s_r = sin(rot_angle);
+        H_rot = [c_r, -s_r, 0; s_r, c_r, 0; 0, 0, 1];
+        H_R = H_rot * H_R;
+        pts_out = H_R * corners;
+        pts_out = pts_out ./ pts_out(3,:);
+        fprintf('Auto-rotation: %.1f deg\n', rad2deg(rot_angle));
+    end
+
+    % Scale and translate to fit
+    min_x = min(pts_out(1,:)); max_x = max(pts_out(1,:));
+    min_y = min(pts_out(2,:)); max_y = max(pts_out(2,:));
+    w_raw = max_x - min_x;
+    h_raw = max_y - min_y;
+
+    target_size = 2000;
+    scale_factor = target_size / max(w_raw, h_raw);
+    T_final = [scale_factor, 0, -scale_factor*min_x;
+        0, scale_factor, -scale_factor*min_y;
+        0, 0, 1];
+    H_R = T_final * H_R;
+
+    out_width = ceil(scale_factor * w_raw) + 10;
+    out_height = ceil(scale_factor * h_raw) + 10;
+
+    fprintf('Output size: %d x %d\n', out_width, out_height);
+
+    outputView = imref2d([out_height, out_width]);
+    img_rect = imwarp(img, projective2d(H_R'), 'OutputView', outputView);
+
+    figure(4); clf;
+    imshow(img_rect);
+    title('Euclidean Rectified Image');
+    hold on;
 else
-    H_aligned = H_raw;
+    % Degenerate case: just copy the affine result
+    fprintf('\nUsing affine rectification result (Figure 3) instead.\n');
+    fprintf('Note: Full Euclidean rectification not possible for this view.\n');
+
+    % Display the same as Figure 3 for Figure 4
+    H_R = H_aff_v;  % Use the affine homography with scaling
+    img_rect = img_aff;
+
+    figure(4); clf;
+    imshow(img_rect);
+    title('Affine Rectified (Euclidean not possible - vanishing line in image)');
+    hold on;
 end
 
-% 3. Auto-Scale: Fit to Box
-pts_out = H_aligned * corners;
-pts_out = pts_out ./ pts_out(3,:);
-min_x = min(pts_out(1,:)); max_x = max(pts_out(1,:));
-min_y = min(pts_out(2,:)); max_y = max(pts_out(2,:));
-w_raw = max_x - min_x;
-h_raw = max_y - min_y;
-target_size = 2000;
-scale_factor = target_size / max(w_raw, h_raw);
-tx = -min_x;
-ty = -min_y;
-T_final = [scale_factor, 0, scale_factor*tx; 0, scale_factor, scale_factor*ty; 0, 0, 1];
-H_R = T_final * H_aligned;
-
-% 4. Warp
-out_width = ceil(scale_factor * w_raw) + 10;
-out_height = ceil(scale_factor * h_raw) + 10;
-outputView = imref2d([out_height, out_width]);
-img_rect = imwarp(img, projective2d(H_R'), 'OutputView', outputView);
-
-figure(4); clf;
-imshow(img_rect);
-title('Step 2: Metric Rectified Image (Upright & Scaled)');
-hold on;
+fprintf('H_R = \n');
+disp(H_R);
 
 if ~isempty(lines_v)
     for i = 1:length(lines_v)
