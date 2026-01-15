@@ -7,7 +7,7 @@ clear; close all; clc;
 
 %% Setup and Parameters
 imageFile = 'San Maurizio.jpg';
-featureFile = 'features_fixed.mat';
+featureFile = 'features_fixed copy.mat';
 
 %% 1. Load Image
 if exist(imageFile, 'file')
@@ -28,11 +28,18 @@ if ~exist('arcs_B', 'var'), arcs_B = {}; end
 
 needs_save = false;
 
-if exist(featureFile, 'file')
-    fprintf('Loading existing features from %s...\n', featureFile);
-    load(featureFile);
-else
-    fprintf('No feature file found. Starting fresh.\n');
+% Load primary features (lines, etc) from "copy" file
+if exist('features_fixed copy.mat', 'file')
+    fprintf('Loading primary features from features_fixed copy.mat...\n');
+    load('features_fixed copy.mat');
+end
+
+% Overwrite specifically the arc features from "fixed" file as requested
+if exist('features_fixed.mat', 'file')
+    fprintf('Loading arc points from features_fixed.mat...\n');
+    arc_data = load('features_fixed.mat', 'arcs_A', 'arcs_B');
+    if isfield(arc_data, 'arcs_A'), arcs_A = arc_data.arcs_A; end
+    if isfield(arc_data, 'arcs_B'), arcs_B = arc_data.arcs_B; end
 end
 
 repickList = [];
@@ -151,176 +158,70 @@ if ~isempty(v_vert), fprintf('  v_vert  = [%.4f, %.4f, %.4f]\n', v_vert); end
 if ~isempty(v_axis), fprintf('  v_axis  = [%.4f, %.4f, %.4f]\n', v_axis); end
 if ~isempty(v_trans), fprintf('  v_trans = [%.4f, %.4f, %.4f]\n', v_trans); end
 
-% Test all possible vanishing line combinations
-fprintf('\n--- Testing Vanishing Line Candidates ---\n');
-
-% Option 1: cross(v_vert, v_trans) - for plane perp to axis (contains vert and trans)
+% Compute the vanishing line of the plane perpendicular to the cylinder axis.
+% This plane contains the vertical direction and the transversal direction.
 if ~isempty(v_vert) && ~isempty(v_trans)
-    l_vt = cross(v_vert, v_trans);
-    l_vt = l_vt / norm(l_vt(1:2));
-    cv_vt = [l_vt*[1;1;1], l_vt*[cols;1;1], l_vt*[cols;rows;1], l_vt*[1;rows;1]];
-    ok_vt = all(cv_vt > 0) || all(cv_vt < 0);
-    fprintf('cross(v_vert, v_trans): corners same side = %d\n', ok_vt);
-end
-
-% Option 2: cross(v_vert, v_axis) - for plane containing vert and axis
-if ~isempty(v_vert) && ~isempty(v_axis)
-    l_va = cross(v_vert, v_axis);
-    l_va = l_va / norm(l_va(1:2));
-    cv_va = [l_va*[1;1;1], l_va*[cols;1;1], l_va*[cols;rows;1], l_va*[1;rows;1]];
-    ok_va = all(cv_va > 0) || all(cv_va < 0);
-    fprintf('cross(v_vert, v_axis): corners same side = %d\n', ok_va);
-end
-
-% Option 3: cross(v_trans, v_axis) - for plane containing trans and axis
-if ~isempty(v_trans) && ~isempty(v_axis)
-    l_ta = cross(v_trans, v_axis);
-    l_ta = l_ta / norm(l_ta(1:2));
-    cv_ta = [l_ta*[1;1;1], l_ta*[cols;1;1], l_ta*[cols;rows;1], l_ta*[1;rows;1]];
-    ok_ta = all(cv_ta > 0) || all(cv_ta < 0);
-    fprintf('cross(v_trans, v_axis): corners same side = %d\n', ok_ta);
-end
-
-% Select a vanishing line that has all corners on the same side (for valid rectification)
-l_inf_perp = [];
-l_inf_name = '';
-
-% Try cross(v_vert, v_trans) first - the plane perpendicular to axis
-if ~isempty(v_vert) && ~isempty(v_trans)
-    l_test = cross(v_vert, v_trans);
-    l_test = l_test / norm(l_test(1:2));
-    cv = [l_test*[1;1;1], l_test*[cols;1;1], l_test*[cols;rows;1], l_test*[1;rows;1]];
-    if all(cv > 0) || all(cv < 0)
-        l_inf_perp = l_test;
-        l_inf_name = 'cross(v_vert, v_trans)';
-    end
-end
-
-% If that doesn't work, try cross(v_trans, v_axis)
-if isempty(l_inf_perp) && ~isempty(v_trans) && ~isempty(v_axis)
-    l_test = cross(v_trans, v_axis);
-    l_test = l_test / norm(l_test(1:2));
-    cv = [l_test*[1;1;1], l_test*[cols;1;1], l_test*[cols;rows;1], l_test*[1;rows;1]];
-    if all(cv > 0) || all(cv < 0)
-        l_inf_perp = l_test;
-        l_inf_name = 'cross(v_trans, v_axis)';
-        fprintf('NOTE: Using cross(v_trans, v_axis) instead - this is NOT the plane perpendicular to axis!\n');
-    end
-end
-
-% If that doesn't work either, try cross(v_vert, v_axis)
-if isempty(l_inf_perp) && ~isempty(v_vert) && ~isempty(v_axis)
-    l_test = cross(v_vert, v_axis);
-    l_test = l_test / norm(l_test(1:2));
-    cv = [l_test*[1;1;1], l_test*[cols;1;1], l_test*[cols;rows;1], l_test*[1;rows;1]];
-    if all(cv > 0) || all(cv < 0)
-        l_inf_perp = l_test;
-        l_inf_name = 'cross(v_vert, v_axis)';
-        fprintf('NOTE: Using cross(v_vert, v_axis) instead - this is NOT the plane perpendicular to axis!\n');
-    end
-end
-
-if ~isempty(l_inf_perp)
-    fprintf('\nSelected vanishing line: %s = [%.4f, %.4f, %.4f]\n', l_inf_name, l_inf_perp);
+    l_inf_perp = cross(v_vert, v_trans);
+    l_inf_perp = l_inf_perp / norm(l_inf_perp(1:2));
+    fprintf('Vanishing line l_inf_perp = [%.4f, %.4f, %.4f]\n', l_inf_perp);
 else
-    warning('No valid vanishing line found! All combinations cross through the image.');
+    l_inf_perp = [];
+    warning('Missing vertical or transversal vanishing point. Cannot compute vanishing line.');
 end
 
 if ~isempty(v_vert) || ~isempty(v_axis) || ~isempty(v_trans)
     figure(2); clf; imshow(img); title('Vanishing Points & Line Extensions'); hold on;
     all_pts = [1, 1; cols, rows];
 
-    if ~isempty(v_vert) && abs(v_vert(3)) > 1e-9
-        vp = v_vert(1:2)/v_vert(3); all_pts = [all_pts; vp];
-        plot(vp(1), vp(2), 'ko', 'MarkerSize', 12, 'LineWidth', 2);
-        text(vp(1), vp(2), '  v_{vert}', 'Color', 'k', 'FontSize', 10, 'FontWeight', 'bold');
-        for i=1:length(lines_v)
-            mid = (lines_v(i).p1 + lines_v(i).p2) / 2;
-            plot([mid(1), vp(1)], [mid(2), vp(2)], 'k:', 'LineWidth', 0.5);
-            if ~isempty(l_inf_perp)
-                L = cross([lines_v(i).p1 1], [lines_v(i).p2 1]);
-                pt_inf = cross(L, l_inf_perp);
-                if abs(pt_inf(3)) > 1e-9
-                    pt_inf = pt_inf(1:2)/pt_inf(3); all_pts = [all_pts; pt_inf];
-                    plot([mid(1), pt_inf(1)], [mid(2), pt_inf(2)], 'k:', 'LineWidth', 0.5);
-                end
-            end
-        end
+    % Plot vanishing points
+    if ~isempty(v_vert)
+        plot(v_vert(1)/v_vert(3), v_vert(2)/v_vert(3), 'ko', 'MarkerSize', 12, 'LineWidth', 2);
+        text(v_vert(1)/v_vert(3), v_vert(2)/v_vert(3), '  v_{vert}', 'Color', 'k', 'FontSize', 10, 'FontWeight', 'bold');
+    end
+    if ~isempty(v_axis)
+        plot(v_axis(1)/v_axis(3), v_axis(2)/v_axis(3), 'go', 'MarkerSize', 12, 'LineWidth', 2);
+        text(v_axis(1)/v_axis(3), v_axis(2)/v_axis(3), '  v_{axis}', 'Color', 'g', 'FontSize', 10, 'FontWeight', 'bold');
+    end
+    if ~isempty(v_trans)
+        plot(v_trans(1)/v_trans(3), v_trans(2)/v_trans(3), 'ro', 'MarkerSize', 12, 'LineWidth', 2);
+        text(v_trans(1)/v_trans(3), v_trans(2)/v_trans(3), '  v_{trans}', 'Color', 'r', 'FontSize', 10, 'FontWeight', 'bold');
     end
 
-    if ~isempty(v_axis) && abs(v_axis(3)) > 1e-9
-        vp = v_axis(1:2)/v_axis(3); all_pts = [all_pts; vp];
-        plot(vp(1), vp(2), 'go', 'MarkerSize', 12, 'LineWidth', 2);
-        text(vp(1), vp(2), '  v_{axis}', 'Color', 'g', 'FontSize', 10, 'FontWeight', 'bold');
-        for i=1:length(lines_axis)
-            mid = (lines_axis(i).p1 + lines_axis(i).p2) / 2;
-            plot([mid(1), vp(1)], [mid(2), vp(2)], 'g:', 'LineWidth', 0.5);
-            if ~isempty(l_inf_perp)
-                L = cross([lines_axis(i).p1 1], [lines_axis(i).p2 1]);
-                pt_inf = cross(L, l_inf_perp);
-                if abs(pt_inf(3)) > 1e-9
-                    pt_inf = pt_inf(1:2)/pt_inf(3); all_pts = [all_pts; pt_inf];
-                    plot([mid(1), pt_inf(1)], [mid(2), pt_inf(2)], 'g:', 'LineWidth', 0.5);
-                end
-            end
-        end
-        if ~isempty(line_apical)
-            mid = (line_apical.p1 + line_apical.p2) / 2;
-            plot([mid(1), vp(1)], [mid(2), vp(2)], 'y:', 'LineWidth', 0.8);
-            if ~isempty(l_inf_perp)
-                L = cross([line_apical.p1 1], [line_apical.p2 1]);
-                pt_inf = cross(L, l_inf_perp);
-                if abs(pt_inf(3)) > 1e-9
-                    pt_inf = pt_inf(1:2)/pt_inf(3); all_pts = [all_pts; pt_inf];
-                    plot([mid(1), pt_inf(1)], [mid(2), pt_inf(2)], 'y:', 'LineWidth', 0.8);
-                end
-            end
-        end
+    % Extensions to the vanishing points
+    if ~isempty(v_vert)
+        vp = v_vert(1:2)/v_vert(3); for i=1:length(lines_v), plot([lines_v(i).p1(1), vp(1)], [lines_v(i).p1(2), vp(2)], 'k:', 'LineWidth', 0.5); end
+    end
+    if ~isempty(v_axis)
+        vp = v_axis(1:2)/v_axis(3); for i=1:length(lines_axis), plot([lines_axis(i).p1(1), vp(1)], [lines_axis(i).p1(2), vp(2)], 'g:', 'LineWidth', 0.5); end
+    end
+    if ~isempty(v_trans)
+        vp = v_trans(1:2)/v_trans(3); for i=1:length(lines_trans), plot([lines_trans(i).p1(1), vp(1)], [lines_trans(i).p1(2), vp(2)], 'r:', 'LineWidth', 0.5); end
     end
 
-    if ~isempty(v_trans) && abs(v_trans(3)) > 1e-9
-        vp = v_trans(1:2)/v_trans(3); all_pts = [all_pts; vp];
-        plot(vp(1), vp(2), 'ro', 'MarkerSize', 12, 'LineWidth', 2);
-        text(vp(1), vp(2), '  v_{trans}', 'Color', [0.8 0 0], 'FontSize', 10, 'FontWeight', 'bold');
-        for i=1:length(lines_trans)
-            mid = (lines_trans(i).p1 + lines_trans(i).p2) / 2;
-            plot([mid(1), vp(1)], [mid(2), vp(2)], 'w:', 'LineWidth', 0.5);
-            if ~isempty(l_inf_perp)
-                L = cross([lines_trans(i).p1 1], [lines_trans(i).p2 1]);
-                pt_inf = cross(L, l_inf_perp);
-                if abs(pt_inf(3)) > 1e-9
-                    pt_inf = pt_inf(1:2)/pt_inf(3); all_pts = [all_pts; pt_inf];
-                    plot([mid(1), pt_inf(1)], [mid(2), pt_inf(2)], 'w:', 'LineWidth', 0.5);
-                end
-            end
-        end
-    end
-
-    x_min = min(all_pts(:,1)); x_max = max(all_pts(:,1));
-    y_min = min(all_pts(:,2)); y_max = max(all_pts(:,2));
-    pad_x = abs(x_max - x_min) * 0.1 + 100;
-    pad_y = abs(y_max - y_min) * 0.1 + 100;
-    curr_axis = [x_min-pad_x, x_max+pad_x, y_min-pad_y, y_max+pad_y];
-
-    set(gca, 'Visible', 'on');
-    axis(curr_axis);
-    set(gca, 'Layer', 'top');
-    grid on; grid minor;
-    set(gca, 'Color', [0.9 0.9 0.9]);
-
+    % Draw the vanishing line
     if ~isempty(l_inf_perp)
         a = l_inf_perp(1); b = l_inf_perp(2); c = l_inf_perp(3);
-        xl = [curr_axis(1), curr_axis(2)];
+
+        % Calculate limits for drawing
+        xl = [1, cols];
+        yl = [1, rows];
+
+        % Use a very large bounding box for drawing the line
+        draw_x = [-cols*5, cols*5];
         if abs(b) > 1e-9
-            yl = -(a*xl + c)/b;
-            plot(xl, yl, 'b-', 'LineWidth', 2.5);
-            text(xl(2), yl(2), '  l_{\infty\perp}', 'Color', 'b', 'FontSize', 14, 'FontWeight', 'bold');
+            draw_y = -(a*draw_x + c)/b;
+            plot(draw_x, draw_y, 'b-', 'LineWidth', 2.5);
+            text(draw_x(2), draw_y(2), '  l_{\infty\perp}', 'Color', 'b', 'FontSize', 14, 'FontWeight', 'bold');
         else
-            x_vert = -c/a;
-            plot([x_vert, x_vert], [curr_axis(3), curr_axis(4)], 'b-', 'LineWidth', 2.5);
-            text(x_vert, curr_axis(4), '  l_{\infty\perp}', 'Color', 'b', 'FontSize', 14, 'FontWeight', 'bold');
+            x_v = -c/a;
+            plot([x_v, x_v], [-rows*5, rows*5], 'b-', 'LineWidth', 2.5);
         end
     end
+
+    % Adjust view
+    set(gca, 'Visible', 'on', 'Layer', 'top');
+    grid on; grid minor;
+    set(gca, 'Color', [0.9 0.9 0.9]);
 end
 
 %% 4. Camera Calibration (K)
@@ -439,159 +340,98 @@ if u0 < 0 || u0 > cols || v0 < 0 || v0 > rows
     warning('Principal point outside image bounds!');
 end
 
-%% 5. Rectification
-fprintf('\n=== Computing Rectification ===\n');
+%% 5. Metric Rectification
+fprintf('\n=== Computing Metric Rectification ===\n');
 
 if isempty(l_inf_perp)
-    error('Cannot rectify: l_inf_perp not computed.');
+    error('Cannot rectify: vanishing line not computed.');
 end
 
-corners = [1, cols, cols, 1; 1, 1, rows, rows; 1, 1, 1, 1];
+% The homography that maps the vanishing line to infinity
+% H = [1 0 0; 0 1 0; l(1)/l(3) l(2)/l(3) 1]
+l_norm = l_inf_perp(:) / l_inf_perp(3);
+H_rect = [1, 0, 0; 0, 1, 0; l_norm(1), l_norm(2), 1];
 
-% --- Stage 1: Affine Rectification ---
-% H_aff maps the vanishing line l_inf_perp to the line at infinity [0; 0; 1]
-l = l_inf_perp(:) / l_inf_perp(3);
-H_aff = [1, 0, 0; 0, 1, 0; l(1), l(2), 1];
+% Determine a robust output view
+% Find which side of the vanishing line has more corners
+% Determine a robust output view by sampling points across the image
+[xx, yy] = meshgrid(linspace(1, cols, 40), linspace(1, rows, 40));
+pts_grid = [xx(:), yy(:), ones(numel(xx), 1)]';
 
-% Affine Safe Warp (for visualization)
-c_aff = H_aff * corners; c_aff = c_aff ./ c_aff(3,:);
-min_ax = min(c_aff(1,:)); max_ax = max(c_aff(1,:));
-min_ay = min(c_aff(2,:)); max_ay = max(c_aff(2,:));
-s_aff = 1500 / (max_ax - min_ax);
-T_aff = [s_aff, 0, -s_aff*min_ax+1; 0, s_aff, -s_aff*min_ay+1; 0, 0, 1];
-H_aff_v = T_aff * H_aff;
-img_aff = imwarp(img, projective2d(H_aff_v'), 'OutputView', imref2d([ceil(s_aff*(max_ay-min_ay)), 1500]));
+% Use H_rect to transform them (3rd row is the vanishing line value)
+grid_vals = H_rect(3,:) * pts_grid;
 
-figure(3); clf; imshow(img_aff); title('Step 1: Affine Rectified Image');
+% Pick the dominant side of the vanishing line
+side = sign(mean(grid_vals));
+if side == 0, side = 1; end
 
-% --- Stage 2: Euclidean Rectification (H_R) ---
-% For a plane perpendicular to the cylinder axis, containing vertical and transversal directions
-% The vanishing line of this plane is l_inf_perp = cross(v_vert, v_trans)
+% Filter: points on the correct side and not too close to the line
+% Points within 15% of the range near the line are avoided to prevent infinite stretching
+v_range = abs(max(grid_vals) - min(grid_vals));
+margin = 0.15 * v_range;
+mask = (sign(grid_vals) == side) & (abs(grid_vals) > margin);
 
-fprintf('\n=== Euclidean Rectification ===\n');
-
-% Check if vanishing line passes through the image
-l = l_inf_perp(:);
-corner_vals = [l'*[1;1;1], l'*[cols;1;1], l'*[cols;rows;1], l'*[1;rows;1]];
-fprintf('Corner values relative to vanishing line: [%.1f, %.1f, %.1f, %.1f]\n', corner_vals);
-
-% Determine which side of the vanishing line has the most image content
-positive_side = sum(corner_vals > 0);
-negative_side = sum(corner_vals < 0);
-fprintf('Corners on positive side: %d, negative side: %d\n', positive_side, negative_side);
-
-if positive_side == 4 || negative_side == 4
-    fprintf('All corners on same side - full image can be rectified.\n');
-    % Use the full image
-    rect_corners = corners;
-    use_full_image = true;
-else
-    warning('Vanishing line passes through image! This is a DEGENERATE case.');
-    fprintf('The vanishing line l_inf_perp crosses through the image.\n');
-    fprintf('This means the plane being rectified is viewed almost edge-on.\n');
-    fprintf('Full perspective rectification is not possible.\n\n');
-
-    % For visualization, we'll just show the affine rectified image (Figure 3)
-    % and skip the problematic full rectification
-    use_full_image = false;
+if sum(mask) < 10 % If too few points pass the margin, be less strict
+    mask = (sign(grid_vals) == side);
 end
 
-if use_full_image
-    % Standard affine rectification: map vanishing line to infinity
-    l_norm = l_inf_perp(:) / l_inf_perp(3);
-    H_R = [1, 0, 0; 0, 1, 0; l_norm(1), l_norm(2), 1];
+% Transform grid points to rectified space for limit calculation
+pts_trans = H_rect * pts_grid(:, mask);
+pts_trans = pts_trans(1:2, :) ./ pts_trans(3, :);
 
-    % Transform corners
-    pts_out = H_R * corners;
-    pts_out = pts_out ./ pts_out(3,:);
-
-    % Auto-rotate to make vertical lines vertical
-    if ~isempty(lines_v)
-        p1 = [lines_v(1).p1, 1]';
-        p2 = [lines_v(1).p2, 1]';
-        q1 = H_R * p1; q1 = q1(1:2)/q1(3);
-        q2 = H_R * p2; q2 = q2(1:2)/q2(3);
-
-        if q2(2) > q1(2)
-            dx = q1(1) - q2(1); dy = q1(2) - q2(2);
-        else
-            dx = q2(1) - q1(1); dy = q2(2) - q1(2);
-        end
-
-        theta = atan2(dy, dx);
-        rot_angle = -pi/2 - theta;
-        while rot_angle > pi, rot_angle = rot_angle - 2*pi; end
-        while rot_angle < -pi, rot_angle = rot_angle + 2*pi; end
-
-        c_r = cos(rot_angle); s_r = sin(rot_angle);
-        H_rot = [c_r, -s_r, 0; s_r, c_r, 0; 0, 0, 1];
-        H_R = H_rot * H_R;
-        pts_out = H_R * corners;
-        pts_out = pts_out ./ pts_out(3,:);
-        fprintf('Auto-rotation: %.1f deg\n', rad2deg(rot_angle));
-    end
-
-    % Scale and translate to fit
-    min_x = min(pts_out(1,:)); max_x = max(pts_out(1,:));
-    min_y = min(pts_out(2,:)); max_y = max(pts_out(2,:));
-    w_raw = max_x - min_x;
-    h_raw = max_y - min_y;
-
-    target_size = 2000;
-    scale_factor = target_size / max(w_raw, h_raw);
-    T_final = [scale_factor, 0, -scale_factor*min_x;
-        0, scale_factor, -scale_factor*min_y;
-        0, 0, 1];
-    H_R = T_final * H_R;
-
-    out_width = ceil(scale_factor * w_raw) + 10;
-    out_height = ceil(scale_factor * h_raw) + 10;
-
-    fprintf('Output size: %d x %d\n', out_width, out_height);
-
-    outputView = imref2d([out_height, out_width]);
-    img_rect = imwarp(img, projective2d(H_R'), 'OutputView', outputView);
-
-    figure(4); clf;
-    imshow(img_rect);
-    title('Euclidean Rectified Image');
-    hold on;
-else
-    % Degenerate case: just copy the affine result
-    fprintf('\nUsing affine rectification result (Figure 3) instead.\n');
-    fprintf('Note: Full Euclidean rectification not possible for this view.\n');
-
-    % Display the same as Figure 3 for Figure 4
-    H_R = H_aff_v;  % Use the affine homography with scaling
-    img_rect = img_aff;
-
-    figure(4); clf;
-    imshow(img_rect);
-    title('Affine Rectified (Euclidean not possible - vanishing line in image)');
-    hold on;
-end
-
-fprintf('H_R = \n');
-disp(H_R);
-
+% Initial auto-rotation to align vertical lines
 if ~isempty(lines_v)
-    for i = 1:length(lines_v)
-        p1_h = [lines_v(i).p1, 1]';
-        p2_h = [lines_v(i).p2, 1]';
-        p1_r = H_R * p1_h; p1_r = p1_r(1:2)'/p1_r(3);
-        p2_r = H_R * p2_h; p2_r = p2_r(1:2)'/p2_r(3);
-        plot([p1_r(1) p2_r(1)], [p1_r(2) p2_r(2)], 'k-', 'LineWidth', 2);
+    p1 = [lines_v(1).p1, 1]'; p2 = [lines_v(1).p2, 1]';
+    q1 = H_rect * p1; q1 = q1(1:2)/q1(3);
+    q2 = H_rect * p2; q2 = q2(1:2)/q2(3);
+    theta = atan2(q2(2)-q1(2), q2(1)-q1(1));
+    rot_angle = -pi/2 - theta;
+    H_rot = [cos(rot_angle), -sin(rot_angle), 0; sin(rot_angle), cos(rot_angle), 0; 0, 0, 1];
+    H_rect = H_rot * H_rect;
+
+    % Update the transformed points for limit calculation
+    pts_trans = H_rot * [pts_trans; ones(1, size(pts_trans, 2))];
+    pts_trans = pts_trans(1:2, :) ./ pts_trans(3, :);
+end
+
+% Find bounding box of visible points in the rotated space
+min_x = min(pts_trans(1,:)); max_x = max(pts_trans(1,:));
+min_y = min(pts_trans(2,:)); max_y = max(pts_trans(2,:));
+w_rect = max_x - min_x; h_rect_val = max_y - min_y;
+
+% Limit extreme aspect ratios which can happen near the vanishing line
+if h_rect_val > 5 * w_rect, h_rect_val = 5 * w_rect; end
+
+% Final scaling and translation (mapping min_x, min_y to 1, 1)
+target_w = 2000;
+scale = target_w / w_rect;
+T = [scale, 0, -scale*min_x + 1; 0, scale, -scale*min_y + 1; 0, 0, 1];
+H_final = T * H_rect;
+
+% Warp and show
+out_size = [ceil(scale * h_rect_val), target_w];
+fprintf('Rectifying view. Points used for limits: %d. Output size: %d x %d\n', sum(mask), out_size(2), out_size(1));
+img_rect = imwarp(img, projective2d(H_final'), 'OutputView', imref2d(out_size));
+
+figure(3); clf; imshow(img_rect); title('Metric Rectified Image');
+hold on;
+if ~isempty(lines_v)
+    for i = 1:min(5, length(lines_v))
+        p1 = H_final*[lines_v(i).p1 1]'; p1 = p1(1:2)/p1(3);
+        p2 = H_final*[lines_v(i).p2 1]'; p2 = p2(1:2)/p2(3);
+        plot([p1(1) p2(1)], [p1(2) p2(2)], 'k-', 'LineWidth', 2);
     end
 end
 if ~isempty(lines_trans)
-    for i = 1:length(lines_trans)
-        p1_h = [lines_trans(i).p1, 1]';
-        p2_h = [lines_trans(i).p2, 1]';
-        p1_r = H_R * p1_h; p1_r = p1_r(1:2)'/p1_r(3);
-        p2_r = H_R * p2_h; p2_r = p2_r(1:2)'/p2_r(3);
-        plot([p1_r(1) p2_r(1)], [p1_r(2) p2_r(2)], 'w-', 'LineWidth', 2);
+    for i = 1:min(5, length(lines_trans))
+        p1 = H_final*[lines_trans(i).p1 1]'; p1 = p1(1:2)/p1(3);
+        p2 = H_final*[lines_trans(i).p2 1]'; p2 = p2(1:2)/p2(3);
+        plot([p1(1) p2(1)], [p1(2) p2(2)], 'w-', 'LineWidth', 2);
     end
 end
+
+H_R = H_final; % For later sections
+fprintf('Rectification complete. Output size: %d x %d\n', out_size(2), out_size(1));
 
 %% 6. 3D Reconstruction
 fprintf('\n=== Performing 3D Reconstruction ===\n');
