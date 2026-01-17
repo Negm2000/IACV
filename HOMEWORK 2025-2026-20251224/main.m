@@ -36,9 +36,9 @@ fprintf('\n=== 3D Reconstruction ===\n');
     reconstruct_3d(K, v_vert, v_axis, v_trans, arcs_A, arcs_B, line_apical);
 fprintf('%d arcs reconstructed\n', length(points_3D));
 
-%% 6. Nodal Points (Analytical - in Rectified Space)
+%% 6. Nodal Points (Geometric - using vault symmetry)
 fprintf('\n=== Nodal Points ===\n');
-[nodal_points, conics_A, conics_B] = find_nodal_points_analytical(arcs_A, arcs_B, H_R);
+nodal_points = find_nodal_points_geometric(arcs_A, arcs_B, H_R, v_axis, v_vert);
 
 %% 7. Plots
 
