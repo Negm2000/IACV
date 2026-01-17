@@ -36,9 +36,9 @@ fprintf('\n=== 3D Reconstruction ===\n');
     reconstruct_3d(K, v_vert, v_axis, v_trans, arcs_A, arcs_B, line_apical);
 fprintf('%d arcs reconstructed\n', length(points_3D));
 
-%% 6. Nodal Points
-nodal_points = find_nodal_points(arcs_A, arcs_B, H_R);
-fprintf('%d nodal points\n', size(nodal_points, 1));
+%% 6. Nodal Points (Analytical - in Rectified Space)
+fprintf('\n=== Nodal Points ===\n');
+[nodal_points, conics_A, conics_B] = find_nodal_points_analytical(arcs_A, arcs_B, H_R);
 
 %% 7. Plots
 
@@ -51,26 +51,56 @@ for i=1:length(lines_trans), L=lines_trans(i); plot([L.p1(1) L.p2(1)], [L.p1(2) 
 for i=1:length(arcs_A), pts=arcs_A{i}; plot(pts(:,1), pts(:,2), 'c.-'); end
 for i=1:length(arcs_B), pts=arcs_B{i}; plot(pts(:,1), pts(:,2), 'm.-'); end
 
-% Fig 2: Vanishing line
-figure(2); imshow(img); title('Vanishing Line'); hold on;
+% Fig 2: Vanishing Points and Line
+figure(2); clf; imshow(img); title('Vanishing Points & Line'); hold on;
+% Draw vanishing line
 a=l_inf_perp(1); b=l_inf_perp(2); c=l_inf_perp(3);
-if abs(b)>1e-6, x=[-cols*5, cols*6]; plot(x, (-c-a*x)/b, 'b-', 'LineWidth', 2); end
+if abs(b)>1e-6, x=[-cols*2, cols*3]; plot(x, (-c-a*x)/b, 'b-', 'LineWidth', 2); end
+% Draw lines converging to vanishing points
+if ~isempty(v_vert) && abs(v_vert(3)) > 1e-6
+    vp = v_vert(1:2)/v_vert(3);
+    for i=1:length(lines_v)
+        plot([lines_v(i).p1(1), vp(1)], [lines_v(i).p1(2), vp(2)], 'k:', 'LineWidth', 0.5);
+    end
+    plot(vp(1), vp(2), 'ko', 'MarkerSize', 15, 'LineWidth', 3);
+end
+if ~isempty(v_axis) && abs(v_axis(3)) > 1e-6
+    vp = v_axis(1:2)/v_axis(3);
+    for i=1:length(lines_axis)
+        plot([lines_axis(i).p1(1), vp(1)], [lines_axis(i).p1(2), vp(2)], 'g:', 'LineWidth', 0.5);
+    end
+    plot(vp(1), vp(2), 'go', 'MarkerSize', 15, 'LineWidth', 3);
+end
+if ~isempty(v_trans) && abs(v_trans(3)) > 1e-6
+    vp = v_trans(1:2)/v_trans(3);
+    for i=1:length(lines_trans)
+        plot([lines_trans(i).p1(1), vp(1)], [lines_trans(i).p1(2), vp(2)], 'r:', 'LineWidth', 0.5);
+    end
+    plot(vp(1), vp(2), 'ro', 'MarkerSize', 15, 'LineWidth', 3);
+end
+% Extend axes to show vanishing points
+axis auto; ax = axis; axis([min(ax(1),-500) max(ax(2),cols+500) min(ax(3),-500) max(ax(4),rows+500)]);
+set(gca, 'XGrid', 'on', 'YGrid', 'on', 'GridAlpha', 0.3, 'GridColor', [0.5 0.5 0.5]);
+set(gca, 'Layer', 'top');  % Grid on top of image
 
 % Fig 3: Rectified
-figure(3); imshow(img_rect); title(sprintf('Rectified %dx%d', out_size(2), out_size(1)));
+figure(3); clf; imshow(img_rect); title(sprintf('Rectified %dx%d', out_size(2), out_size(1)));
 
 % Fig 4: Nodal points
-figure(4); imshow(img_rect); title('Nodal Points'); hold on;
+figure(4); clf; imshow(img_rect); title('Nodal Points'); hold on;
 for n=1:size(nodal_points,1)
     p = H_R * [nodal_points(n,1:2), 1]'; p = p(1:2)/p(3);
     plot(p(1), p(2), 'yo', 'MarkerSize', 12, 'LineWidth', 2);
+    text(p(1)+10, p(2), sprintf('N%d%d', nodal_points(n,3), nodal_points(n,4)), 'Color', 'y');
 end
 
 % Fig 5: 3D
-figure(5); hold on;
+fig5 = figure(5); clf; hold on;
+set(fig5, 'Visible', 'on', 'WindowState', 'normal');
+movegui(fig5, 'center');
 for i=1:length(points_3D)
     pts = points_3D(i).pts;
-    if points_3D(i).arc=='A', c='c'; else, c='m'; end
+    if strcmp(points_3D(i).arc, 'A'), c='c'; else, c='m'; end
     plot3(pts(:,1), pts(:,2), pts(:,3), [c '.-'], 'LineWidth', 1.5);
 end
 if ~isempty(P_axis)
@@ -79,10 +109,13 @@ if ~isempty(P_axis)
     plot3(ax(:,1), ax(:,2), ax(:,3), 'g-', 'LineWidth', 3);
 end
 quiver3(0,0,0, axis_dir(1), axis_dir(2), axis_dir(3), 2, 'g', 'LineWidth', 2);
-grid on; axis equal; xlabel('X'); ylabel('Y'); zlabel('Z'); title('3D'); view(3);
+grid on; axis equal; xlabel('X'); ylabel('Y'); zlabel('Z'); title('3D Reconstruction'); view(3);
+drawnow;
 
 % Fig 6: Views
-figure(6);
+fig6 = figure(6); clf;
+set(fig6, 'Visible', 'on', 'WindowState', 'normal');
+movegui(fig6, 'northeast');
 vs = {[0 90], [0 0], [90 0], [45 30]};
 for v=1:4
     subplot(2,2,v); hold on;
@@ -97,7 +130,10 @@ sgtitle('3D Views');
 
 % Fig 7: Single arc
 if ~isempty(points_3D)
-    figure(7); pts = points_3D(1).pts;
+    fig7 = figure(7); clf;
+    set(fig7, 'Visible', 'on', 'WindowState', 'normal');
+    movegui(fig7, 'southeast');
+    pts = points_3D(1).pts;
     for v=1:4
         subplot(2,2,v);
         plot3(pts(:,1), pts(:,2), pts(:,3), 'c.-', 'LineWidth', 2);
@@ -126,17 +162,3 @@ fprintf('Vert: %.2f deg, Horiz: %.2f deg\n', mean(angles_v), mean(angles_t));
 if mean([angles_v angles_t]) < 2, fprintf('SUCCESS\n'); else, fprintf('WARNING\n'); end
 
 fprintf('\n=== Done ===\n');
-
-%% Helper
-function np = find_nodal_points(arcs_A, arcs_B, H_R)
-np = [];
-for i=1:length(arcs_A), for j=1:length(arcs_B)
-        pA=arcs_A{i}; pB=arcs_B{j};
-        for k=1:size(pA,1), for m=1:size(pB,1)
-                a = H_R*[pA(k,:) 1]'; a=a(1:2)/a(3);
-                b = H_R*[pB(m,:) 1]'; b=b(1:2)/b(3);
-                if norm(a-b)<50, np=[np; (pA(k,:)+pB(m,:))/2, i, j]; end
-        end, end
-end, end
-if ~isempty(np), [~,idx]=unique(np(:,3:4),'rows','first'); np=np(idx,:); end
-end
