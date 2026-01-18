@@ -133,6 +133,7 @@ fig6 = figure(6); clf;
 set(fig6, 'Visible', 'on', 'WindowState', 'normal');
 movegui(fig6, 'northeast');
 vs = {[0 90], [0 0], [90 0], [45 30]};
+titles = {'Top View (XY)', 'Front View (XZ)', 'Side View (YZ)', 'Perspective (3D)'};
 for v=1:4
     subplot(2,2,v); hold on;
     for i=1:length(points_3D)
@@ -140,9 +141,16 @@ for v=1:4
         if points_3D(i).arc=='A', c='c'; else, c='m'; end
         plot3(pts(:,1), pts(:,2), pts(:,3), [c '.-']);
     end
+    if ~isempty(P_axis)
+        t = linspace(-3,3,30)';
+        ax_line = P_axis(:)' + t*axis_dir(:)';
+        plot3(ax_line(:,1), ax_line(:,2), ax_line(:,3), 'g-', 'LineWidth', 2);
+    end
     view(vs{v}); axis equal; grid on;
+    xlabel('X'); ylabel('Y'); zlabel('Z');
+    title(titles{v});
 end
-sgtitle('3D Views');
+sgtitle('3D Reconstruction Views');
 
 % Fig 7: Single arc
 if ~isempty(points_3D)
@@ -154,8 +162,10 @@ if ~isempty(points_3D)
         subplot(2,2,v);
         plot3(pts(:,1), pts(:,2), pts(:,3), 'c.-', 'LineWidth', 2);
         view(vs{v}); axis equal; grid on;
+        xlabel('X'); ylabel('Y'); zlabel('Z');
+        title(titles{v});
     end
-    sgtitle('Arc A1');
+    sgtitle('Arc A1 Detail');
     fprintf('\nArc A1 coords:\n');
     for p=1:min(12,size(pts,1)), fprintf('[%.2f,%.2f,%.2f]\n', pts(p,:)); end
 end
