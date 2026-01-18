@@ -20,25 +20,25 @@ fprintf('\n=== Vanishing Points ===\n');
 [v_vert, v_axis, v_trans, v_vert_n, v_axis_n, v_trans_n, l_inf_perp] = ...
     compute_vanishing_geometry(img, lines_v, lines_axis, line_apical, lines_trans);
 
-%% 3. Calibration Matrix K
-fprintf('\n=== Calibration ===\n');
-K = compute_calibration_matrix(v_vert_n, v_axis_n, v_trans_n, img);
-fprintf('K: fx=%.0f, fy=%.0f, (u0,v0)=(%.0f,%.0f)\n', K(1,1), K(2,2), K(1,3), K(2,3));
-
-%% 4. Metric Rectification
+%% 3. Metric Rectification
 fprintf('\n=== Rectification ===\n');
 [H_R, img_rect, out_size] = compute_metric_rectification(img, l_inf_perp, v_vert, v_trans);
 fprintf('Output: %dx%d\n', out_size(2), out_size(1));
 
-%% 5. 3D Reconstruction
+%% 4. Calibration Matrix K
+fprintf('\n=== Calibration ===\n');
+K = compute_calibration_matrix(v_vert_n, v_axis_n, v_trans_n, img);
+fprintf('K: fx=%.0f, fy=%.0f, (u0,v0)=(%.0f,%.0f)\n', K(1,1), K(2,2), K(1,3), K(2,3));
+
+%% 5. Nodal Points (needed for axis localization)
+fprintf('\n=== Nodal Points ===\n');
+nodal_points = find_nodal_points_theoretical(arcs_A, arcs_B, lines_trans, H_R, v_axis);
+
+%% 6. 3D Reconstruction (uses nodal points for axis localization)
 fprintf('\n=== 3D Reconstruction ===\n');
 [points_3D, axis_dir, vert_dir, trans_dir, P_axis] = ...
-    reconstruct_3d(K, v_vert, v_axis, v_trans, arcs_A, arcs_B, line_apical);
+    reconstruct_3d(K, v_vert, v_axis, v_trans, arcs_A, arcs_B, line_apical, nodal_points);
 fprintf('%d arcs reconstructed\n', length(points_3D));
-
-%% 6. Nodal Points (Geometric - using vault symmetry)
-fprintf('\n=== Nodal Points ===\n');
-nodal_points = find_nodal_points_geometric(arcs_A, arcs_B, H_R, v_axis, v_vert);
 
 %% 7. Plots
 
@@ -83,8 +83,24 @@ axis auto; ax = axis; axis([min(ax(1),-500) max(ax(2),cols+500) min(ax(3),-500) 
 set(gca, 'XGrid', 'on', 'YGrid', 'on', 'GridAlpha', 0.3, 'GridColor', [0.5 0.5 0.5]);
 set(gca, 'Layer', 'top');  % Grid on top of image
 
-% Fig 3: Rectified
-figure(3); clf; imshow(img_rect); title(sprintf('Rectified %dx%d', out_size(2), out_size(1)));
+% Fig 3: Rectified with line overlays
+figure(3); clf; imshow(img_rect); title(sprintf('Rectified %dx%d', out_size(2), out_size(1))); hold on;
+% Overlay vertical lines (should be vertical in rectified)
+for i = 1:length(lines_v)
+    p1 = H_R * [lines_v(i).p1 1]'; p1 = p1(1:2)/p1(3);
+    p2 = H_R * [lines_v(i).p2 1]'; p2 = p2(1:2)/p2(3);
+    if p1(1)>0 && p1(2)>0 && p2(1)>0 && p2(2)>0 && p1(1)<out_size(2) && p1(2)<out_size(1)
+        plot([p1(1) p2(1)], [p1(2) p2(2)], 'k-', 'LineWidth', 2);
+    end
+end
+% Overlay transversal lines (should be horizontal in rectified)
+for i = 1:length(lines_trans)
+    p1 = H_R * [lines_trans(i).p1 1]'; p1 = p1(1:2)/p1(3);
+    p2 = H_R * [lines_trans(i).p2 1]'; p2 = p2(1:2)/p2(3);
+    if p1(1)>0 && p1(2)>0 && p2(1)>0 && p2(2)>0 && p1(1)<out_size(2) && p1(2)<out_size(1)
+        plot([p1(1) p2(1)], [p1(2) p2(2)], 'w-', 'LineWidth', 2);
+    end
+end
 
 % Fig 4: Nodal points
 figure(4); clf; imshow(img_rect); title('Nodal Points'); hold on;
