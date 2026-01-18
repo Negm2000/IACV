@@ -32,13 +32,13 @@ fprintf('K: fx=%.0f, fy=%.0f, (u0,v0)=(%.0f,%.0f)\n', K(1,1), K(2,2), K(1,3), K(
 
 %% 5. Nodal Points (needed for axis localization)
 fprintf('\n=== Nodal Points ===\n');
-nodal_points = find_nodal_points_theoretical(arcs_A, arcs_B, lines_trans, H_R, v_axis);
+nodal_points = find_nodal_points_geometric(arcs_A, arcs_B, H_R, v_axis, [], line_apical);
 
-%% 6. 3D Reconstruction (uses nodal points for axis localization)
+%% 6. 3D Reconstruction (ray-cylinder intersection)
 fprintf('\n=== 3D Reconstruction ===\n');
-[points_3D, axis_dir, vert_dir, trans_dir, P_axis] = ...
+[points_3D, axis_dir, vert_dir, trans_dir, P_axis, R_cylinder] = ...
     reconstruct_3d(K, v_vert, v_axis, v_trans, arcs_A, arcs_B, line_apical, nodal_points);
-fprintf('%d arcs reconstructed\n', length(points_3D));
+fprintf('%d arcs reconstructed, R=%.4f\n', length(points_3D), R_cylinder);
 
 %% 7. Plots
 
@@ -121,7 +121,7 @@ for i=1:length(points_3D)
 end
 if ~isempty(P_axis)
     t = linspace(-5,5,50)';
-    ax = P_axis' + t*axis_dir';
+    ax = P_axis(:)' + t*axis_dir(:)';
     plot3(ax(:,1), ax(:,2), ax(:,3), 'g-', 'LineWidth', 3);
 end
 quiver3(0,0,0, axis_dir(1), axis_dir(2), axis_dir(3), 2, 'g', 'LineWidth', 2);
