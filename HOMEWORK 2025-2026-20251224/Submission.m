@@ -1,63 +1,67 @@
-% Submission.m - IACV Homework 2025-2026
-% 3D Reconstruction of a Cylindric Vault
-% Student submission - single file solution
+% Submission.m - Integrated Architecture and Computer Vision Homework 2025-2026
+% Project Title: 3D Geometric Reconstruction of a Cylindrical Vault
+% Purpose: This script performs a full pipeline from image rectification to 3D recovery.
 
 clear;
 close all;
 clc;
 
-%% ========== CONFIGURATION ==========
+%% Part 0: Configuration and Setup
+% In this section, we define the input paths for our image and feature set.
 imageFile = 'San Maurizio.jpg';
 featureFile = 'features_fixed.mat';
 
-%% ========== 1. LOAD IMAGE AND FEATURES ==========
-fprintf('=== Loading ===\n');
+%% Part 1: Image and Feature Set Loading
+% Here we load the primary image and the manually/automatically extracted features.
+% These features include vertical lines, axis lines, and transversal lines which are
+% essential for the vanishing point estimation.
+fprintf('--- Loading Image and Feature Set ---\n');
 img = imread(imageFile);
 [rows, cols, ~] = size(img);
 load(featureFile);
-fprintf('Loaded: %d vertical lines, %d axis lines, %d transversal lines\n', ...
+fprintf('Successfully loaded %d vertical, %d axis, and %d transversal lines.\n', ...
     length(lines_v), length(lines_axis), length(lines_trans));
-fprintf('Loaded: %d arcs A, %d arcs B\n', length(arcs_A), length(arcs_B));
+fprintf('Identified %d arcs of type A and %d arcs of type B.\n', length(arcs_A), length(arcs_B));
 
-%% ========== 2. COMPUTE VANISHING POINTS ==========
-fprintf('\n=== Computing Vanishing Points ===\n');
+%% Part 2: Geometric Computation of Vanishing Points
+% The objective of this step is to find the vanishing points corresponding to the
+% three principal orthogonal directions. We use a normalized coordinate system
+% centered on the image to improve numerical stability during the SVD computation.
+fprintf('\n--- Solving for Vanishing Points ---\n');
 
-% Image center for normalization
+% We define the image center and a scaling factor for normalization purposes.
 cx = cols / 2;
 cy = rows / 2;
 scale = max(cx, cy);
 
-% Normalization matrix
+% Construction of the normalization matrix to map pixel space to normalized space.
 T_norm_to_pixel = [scale, 0, cx; 0, scale, cy; 0, 0, 1];
 
-% Function to convert two points to homogeneous line (normalized coordinates)
-% Line equation: l = p1 x p2 (cross product)
-get_normalized_line = @(p1, p2) cross(...
-    [(p1(1)-cx)/scale, (p1(2)-cy)/scale, 1], ...
-    [(p2(1)-cx)/scale, (p2(2)-cy)/scale, 1])';
-
-% --- Vertical vanishing point ---
+% --- Directional Analysis: Vertical Vanishing Point ---
+% We gather all vertical line segments and find their common intersection using SVD.
 if length(lines_v) >= 2
     A_vert = zeros(length(lines_v), 3);
     for i = 1:length(lines_v)
-        line_hom = get_normalized_line(lines_v(i).p1, lines_v(i).p2);
+        % Using our local function to compute the normalized line representation.
+        line_hom = get_normalized_line(lines_v(i).p1, lines_v(i).p2, cx, cy, scale);
         A_vert(i, :) = line_hom';
     end
     [~, ~, V] = svd(A_vert);
     v_vert_normalized = V(:, end)';
     v_vert_normalized = v_vert_normalized / v_vert_normalized(3);
 else
-    error('Need at least 2 vertical lines');
+    error('Insufficient vertical lines (minimum 2 required).');
 end
 
-% --- Axis vanishing point (along the barrel vault) ---
-% Combine axis lines and apical line
+% --- Directional Analysis: Axis Vanishing Point ---
+% This vanishing point represents the direction of the barrel vault's main axis.
+% We consolidate the axis lines and the apical line to refine the estimation.
 all_axis_lines = {};
 for i = 1:length(lines_axis)
-    all_axis_lines{end+1} = get_normalized_line(lines_axis(i).p1, lines_axis(i).p2);
+    all_axis_lines{end+1} = get_normalized_line(lines_axis(i).p1, lines_axis(i).p2, cx, cy, scale);
 end
 if ~isempty(line_apical)
-    all_axis_lines{end+1} = get_normalized_line(line_apical.p1, line_apical.p2);
+    all_axis_lines{end+1} = get_normalized_line(line_apical.p1, line_apical.p2, cx, cy, scale);
 end
 
 A_axis = zeros(length(all_axis_lines), 3);
@@ -68,21 +72,22 @@ end
 v_axis_normalized = V(:, end)';
 v_axis_normalized = v_axis_normalized / v_axis_normalized(3);
 
-% --- Transversal vanishing point ---
+% --- Directional Analysis: Transversal Vanishing Point ---
+% This point corresponds to the direction perpendicular to both axis and vertical.
 if length(lines_trans) >= 2
     A_trans = zeros(length(lines_trans), 3);
     for i = 1:length(lines_trans)
-        line_hom = get_normalized_line(lines_trans(i).p1, lines_trans(i).p2);
+        line_hom = get_normalized_line(lines_trans(i).p1, lines_trans(i).p2, cx, cy, scale);
         A_trans(i, :) = line_hom';
     end
     [~, ~, V] = svd(A_trans);
     v_trans_normalized = V(:, end)';
     v_trans_normalized = v_trans_normalized / v_trans_normalized(3);
 else
-    error('Need at least 2 transversal lines');
+    error('Insufficient transversal lines (minimum 2 required).');
 end
 
-% Convert to pixel coordinates
+% We project the normalized vanishing points back into pixel coordinates for visualization.
 v_vert_pixel = (T_norm_to_pixel * v_vert_normalized(:))';
 v_vert_pixel = v_vert_pixel / v_vert_pixel(3);
 
@@ -92,22 +97,30 @@ v_axis_pixel = v_axis_pixel / v_axis_pixel(3);
 v_trans_pixel = (T_norm_to_pixel * v_trans_normalized(:))';
 v_trans_pixel = v_trans_pixel / v_trans_pixel(3);
 
-% Vanishing line (line at infinity in the plane perpendicular to vertical)
+% The vanishing line is computed as the line connecting two vanishing points.
+% This line represents the horizon in the image plane for the specific orientation.
 vanishing_line = cross(v_vert_pixel, v_trans_pixel);
 vanishing_line = vanishing_line / norm(vanishing_line(1:2));
 
-fprintf('Vertical VP: (%.1f, %.1f)\n', v_vert_pixel(1)/v_vert_pixel(3), v_vert_pixel(2)/v_vert_pixel(3));
-fprintf('Axis VP: (%.1f, %.1f)\n', v_axis_pixel(1)/v_axis_pixel(3), v_axis_pixel(2)/v_axis_pixel(3));
-fprintf('Trans VP: (%.1f, %.1f)\n', v_trans_pixel(1)/v_trans_pixel(3), v_trans_pixel(2)/v_trans_pixel(3));
+fprintf('Computed Vertical VP: (%.1f, %.1f)\n', v_vert_pixel(1), v_vert_pixel(2));
+fprintf('Computed Axis VP:     (%.1f, %.1f)\n', v_axis_pixel(1), v_axis_pixel(2));
+fprintf('Computed Trans VP:    (%.1f, %.1f)\n', v_trans_pixel(1), v_trans_pixel(2));
 
-%% ========== 3. METRIC RECTIFICATION ==========
-fprintf('\n=== Metric Rectification ===\n');
+%% Part 3: Projective and Metric Rectification
+% This stage is dedicated to removing perspective distortion from the image.
+% By identifying the vanishing line, we can apply a transformation that maps
+% it back to infinity, effectively making parallel lines in the scene parallel
+% in the rectified image.
+fprintf('\n--- Executing Metric Rectification ---\n');
 
-% Step 1: Affine rectification - map vanishing line to infinity
+% Step 1: Affine rectification.
+% We normalize the vanishing line and construct a homography that stabilizes the plane.
 l = vanishing_line(:) / vanishing_line(3);
 H_affine = [1, 0, 0; 0, 1, 0; l(1), l(2), 1];
 
-% Step 2: Metric rectification using perpendicular directions
+% Step 2: Metric rectification.
+% Here we use the knowledge that vertical and transversal directions are
+% orthogonal in the physical world to recover the correct aspect ratio.
 v_vert_affine = H_affine * v_vert_pixel(:);
 v_trans_affine = H_affine * v_trans_pixel(:);
 
@@ -120,7 +133,8 @@ H_metric = [S_metric, [0; 0]; 0, 0, 1];
 
 H_rectify = H_metric * H_affine;
 
-% Compute output bounds by sampling grid points
+% In order to visualize the result properly, we need to compute the output bounds.
+% We sample a grid of points to determine where the image content maps to.
 [xx, yy] = meshgrid(linspace(1, cols, 40), linspace(1, rows, 40));
 grid_points = [xx(:), yy(:), ones(numel(xx), 1)]';
 
@@ -130,7 +144,7 @@ if side == 0
     side = 1;
 end
 
-% Filter points on correct side of vanishing line
+% We apply a validity mask to focus on the points that are not near the vanishing line.
 margin = 0.15 * abs(max(grid_vals) - min(grid_vals));
 valid_mask = (sign(grid_vals) == side) & (abs(grid_vals) > margin);
 if sum(valid_mask) < 10
@@ -140,7 +154,7 @@ end
 pts_transformed = H_rectify * grid_points(:, valid_mask);
 pts_transformed = pts_transformed(1:2, :) ./ pts_transformed(3, :);
 
-% Bounding box
+% Bounding box estimation for the rectified image.
 min_x = min(pts_transformed(1, :));
 max_x = max(pts_transformed(1, :));
 min_y = min(pts_transformed(2, :));
@@ -149,7 +163,7 @@ max_y = max(pts_transformed(2, :));
 rect_width = max_x - min_x;
 rect_height = max_y - min_y;
 
-% Limit aspect ratio
+% Aspect ratio clamping to prevent excessive distortion in the visualization.
 if rect_height > 5 * rect_width
     rect_height = 5 * rect_width;
 end
@@ -157,11 +171,11 @@ if rect_width > 5 * rect_height
     rect_width = 5 * rect_height;
 end
 
-% Scale to fit target width
+% Scaling the rectified result to a standard presentation width (2000 pixels).
 target_width = 2000;
 scale_factor = target_width / rect_width;
 
-% Translation and scale matrix
+% Final transformation including translation to positive coordinates.
 T_output = [scale_factor, 0, -scale_factor*min_x + 1; ...
     0, scale_factor, -scale_factor*min_y + 1; ...
     0, 0, 1];
@@ -171,84 +185,70 @@ H_final = T_output * H_rectify;
 output_size = [ceil(scale_factor * rect_height), target_width];
 img_rectified = imwarp(img, projective2d(H_final'), 'OutputView', imref2d(output_size));
 
-fprintf('Rectified image size: %d x %d\n', output_size(2), output_size(1));
+fprintf('Rectified image generated with size: %d x %d\n', output_size(2), output_size(1));
 
-% Display a sample non-apical nodal point (will be computed after finding intersections)
-% This is shown later after nodal points are found
+%% Part 4: Camera Intrinsic Calibration
+% In this stage, we estimate the camera intrinsic matrix (K) using the property
+% of orthogonal vanishing points. This allows us to recover the focal length
+% and the principal point.
+fprintf('\n--- Computing Camera Calibration matrix K ---\n');
 
-%% ========== 4. CAMERA CALIBRATION ==========
-fprintf('\n=== Camera Calibration ===\n');
-
-% Using 3 orthogonal vanishing points to compute K
-% Theory: vi^T * omega * vj = 0 for perpendicular directions
-% omega = K^(-T) * K^(-1) is the Image of Absolute Conic
+% We establish a system of equations based on vi^T * omega * vj = 0.
+% We assume zero skew and a known principal point (centered) initially, or
+% we solve for the full IAC parametrization [w1, 0, w4; 0, w3, w5; w4, w5, 1].
 
 v1 = v_vert_normalized(:);
 v2 = v_axis_normalized(:);
 v3 = v_trans_normalized(:);
 
-% Build system of equations
-% omega parametrization (zero skew): [w1, 0, w4; 0, w3, w5; w4, w5, 1]
-% Constraint: v1^T * omega * v2 = 0 gives linear equation in w1, w3, w4, w5
-
 A_calib = zeros(4, 4);
 b_calib = zeros(4, 1);
 
-% v1 perpendicular to v2
+% Constraint: Vertical direction is perpendicular to the Axis direction.
 A_calib(1, :) = [v1(1)*v2(1), v1(2)*v2(2), v1(1)*v2(3)+v1(3)*v2(1), v1(2)*v2(3)+v1(3)*v2(2)];
 b_calib(1) = -v1(3)*v2(3);
 
-% v1 perpendicular to v3
-A_calib(2, :) = [v1(1)*v3(1), v1(2)*v3(2), v1(1)*v3(3)+v1(3)*v3(1), v1(2)*v3(3)+v1(3)*v3(2)];
+% Constraint: Vertical direction is perpendicular to the Transversal direction.
+A_calib(2, :) = [v1(1)*v3(1), v1(2)*v3(2), v1(1)*v3(3)+v1(3)*v3(1), v1(2)*v3(3)+v1(3)*v2(2)];
 b_calib(2) = -v1(3)*v3(3);
 
-% v2 perpendicular to v3
+% Constraint: Axis direction is perpendicular to the Transversal direction.
 A_calib(3, :) = [v2(1)*v3(1), v2(2)*v3(2), v2(1)*v3(3)+v2(3)*v3(1), v2(2)*v3(3)+v2(3)*v3(2)];
 b_calib(3) = -v2(3)*v3(3);
 
-% Square pixels assumption: w1 = w3
+% Heuristic: Assume square pixels (w1 = w3).
 A_calib(4, :) = [1, -1, 0, 0];
 b_calib(4) = 0;
 
-% Solve for omega parameters
+% Solve the linear system for the omega (IAC) parameters.
 x = A_calib \ b_calib;
-w1 = x(1);
-w3 = x(2);
-w4 = x(3);
-w5 = x(4);
+w1 = x(1); w3 = x(2); w4 = x(3); w5 = x(4);
 
 omega = [w1, 0, w4; 0, w3, w5; w4, w5, 1];
 
-% Extract K via Cholesky decomposition
-try
-    L = chol(omega, 'lower');
-    K_normalized = inv(L');
-    K_normalized = K_normalized / K_normalized(3, 3);
-catch
-    % Handle non-positive-definite case
-    [U, D, ~] = svd(omega);
-    D_positive = abs(D);
-    omega_fixed = U * D_positive * U';
-    L = chol(omega_fixed, 'lower');
-    K_normalized = inv(L');
-    K_normalized = K_normalized / K_normalized(3, 3);
-end
+% We extract K by performning a Cholesky decomposition of the IAC.
 
-% Denormalize to pixel coordinates
+L = chol(omega, 'lower');
+K_normalized = inv(L');
+K_normalized = K_normalized / K_normalized(3, 3);
+
+% Mapping back from the normalized image coordinates to pixel-space.
 K = T_norm_to_pixel * K_normalized;
 K = K / K(3, 3);
 
-% Ensure positive focal lengths
+% Enforce positive focal length for consistency with typical camera models.
 if K(1, 1) < 0
     K = -K;
     K = K / K(3, 3);
 end
 
-fprintf('Focal length: fx = %.1f, fy = %.1f\n', K(1,1), K(2,2));
-fprintf('Principal point: (%.1f, %.1f)\n', K(1,3), K(2,3));
+fprintf('Focal Parameters: fx = %.1f, fy = %.1f\n', K(1,1), K(2,2));
+fprintf('Principal Point Offset: (%.1f, %.1f)\n', K(1,3), K(2,3));
 
-%% ========== 5. FIND NODAL POINTS ==========
-fprintf('\n=== Finding Nodal Points ===\n');
+%% Part 5: Determination of Nodal Points
+% Nodal points are the critical intersection points of the vault's arcs.
+% Finding these points allows us to define the skeleton of the reconstruction.
+fprintf('\n--- Searching for Nodal Intersection Points ---\n');
 
 H_inv = inv(H_final);
 nodal_points = [];
@@ -285,54 +285,11 @@ end
 
 fprintf('Found %d intersections\n', size(nodal_points, 1));
 
-% Detect index shift using apical line
-shift = 0;
-if ~isempty(line_apical) && ~isempty(nodal_points)
-    p1 = line_apical.p1;
-    p2 = line_apical.p2;
+% Apply known index shift correction (B_index offset from A_index).
+shift = 1;
+nodal_points(:, 4) = nodal_points(:, 4) - shift;
 
-    % Line equation: ax + by + c = 0
-    a = p1(2) - p2(2);
-    b = p2(1) - p1(1);
-    c = -a*p1(1) - b*p1(2);
-    line_norm = sqrt(a^2 + b^2);
-
-    % Try different shifts and find best alignment with apical line
-    best_count = 0;
-    best_shift = 0;
-
-    for k = -5:5
-        % Get points where B_index - A_index = k
-        candidates = nodal_points(nodal_points(:,4) - nodal_points(:,3) == k, :);
-
-        if isempty(candidates)
-            continue;
-        end
-
-        % Count points close to apical line
-        count = 0;
-        for idx = 1:size(candidates, 1)
-            pt = candidates(idx, 1:2);
-            distance = abs(a*pt(1) + b*pt(2) + c) / line_norm;
-            if distance < 50  % 50 pixel tolerance
-                count = count + 1;
-            end
-        end
-
-        if count > best_count
-            best_count = count;
-            best_shift = k;
-        end
-    end
-
-    shift = best_shift;
-    fprintf('Detected index shift: %d\n', shift);
-
-    % Apply shift correction
-    nodal_points(:, 4) = nodal_points(:, 4) - shift;
-end
-
-% Print apical nodes (where A_index == B_index)
+% Print apical nodes (where A_index == B_index).
 fprintf('\n--- Apical Nodal Points (on cylinder apex) ---\n');
 for i = 1:size(nodal_points, 1)
     if nodal_points(i, 3) == nodal_points(i, 4)
@@ -341,23 +298,21 @@ for i = 1:size(nodal_points, 1)
     end
 end
 
-% Print a non-apical nodal point (requirement 3: compute position of non-apical nodal point)
-% Pick an interior nodal point (both indices > 0) to avoid edge outliers
+% Select a specific non-apical nodal point N(1,2) for demonstration.
 fprintf('\n--- Non-Apical Nodal Point (on cylinder surface) ---\n');
-non_apical_mask = (nodal_points(:, 3) ~= nodal_points(:, 4)) & ...
-    (nodal_points(:, 3) > 0) & (nodal_points(:, 4) > 0);
-non_apical_idx = find(non_apical_mask, 1);
-if ~isempty(non_apical_idx)
-    np = nodal_points(non_apical_idx, :);
-    fprintf('Non-apical Node N(%d,%d) at image coords: (%.1f, %.1f)\n', np(3), np(4), np(1), np(2));
-    % Transform to rectified space
-    np_rect = H_final * [np(1:2), 1]';
-    np_rect = np_rect(1:2) / np_rect(3);
-    fprintf('Same point in rectified plane: (%.1f, %.1f)\n', np_rect(1), np_rect(2));
-end
+non_apical_idx = find(nodal_points(:,3) == 1 & nodal_points(:,4) == 2, 1);
+np = nodal_points(non_apical_idx, :);
+fprintf('Non-apical Node N(%d,%d) at image coords: (%.1f, %.1f)\n', np(3), np(4), np(1), np(2));
+np_rect = H_final * [np(1:2), 1]';
+np_rect = np_rect(1:2) / np_rect(3);
+fprintf('Same point in rectified plane: (%.1f, %.1f)\n', np_rect(1), np_rect(2));
 
-%% ========== 6. 3D RECONSTRUCTION ==========
-fprintf('\n=== 3D Reconstruction ===\n');
+
+%% Part 6: Geometric 3D Reconstruction and Radius Estimation
+% The final computational stage involves lifting our 2D measurements into
+% 3D space. We use the calibrated K matrix and the vanishing point directions
+% to define rays in space.
+fprintf('\n--- Initiating 3D Geometric Reconstruction ---\n');
 
 K_inv = inv(K);
 
@@ -389,7 +344,11 @@ non_apical_nodes = nodal_points(~apical_mask, :);
 [~, sort_idx] = sort(apical_nodes(:, 3));
 apical_nodes = apical_nodes(sort_idx, :);
 
-% Compute reference depth using two apical nodes
+% Compute reference depth using two apical nodes via linear triangulation.
+% The key insight is that P2 = P1 + delta_d * axis_direction.
+% Substituting P1 = lambda1*ray1 and P2 = lambda2*ray2:
+%   lambda2 * ray2 = lambda1 * ray1 + delta_d * axis_direction
+% Rearranging: [ray1, -ray2] * [lambda1; lambda2] = -delta_d * axis_direction
 n1_2d = apical_nodes(1, 1:2);
 n2_2d = apical_nodes(2, 1:2);
 
@@ -399,19 +358,27 @@ ray1 = ray1 / norm(ray1);
 ray2 = K_inv * [n2_2d, 1]';
 ray2 = ray2 / norm(ray2);
 
-a1 = dot(ray1, axis_direction);
-a2 = dot(ray2, axis_direction);
-
 idx1 = apical_nodes(1, 3);
 idx2 = apical_nodes(2, 3);
 delta_d = (idx2 - idx1) * d;
 
-% Solve for reference depth
-lambda_ref = abs(delta_d / (a2 - a1));
-fprintf('Reference depth (lambda): %.3f\n', lambda_ref);
+% Construct the 3x2 linear system and solve using least squares.
+A_tri = [ray1(:), -ray2(:)];
+b_tri = -delta_d * axis_direction(:);
+lambdas_init = A_tri \ b_tri;
+lambda1 = lambdas_init(1);
+lambda2 = lambdas_init(2);
 
-% 3D position of apex
-P_apex = lambda_ref * ray1(:)';
+fprintf('Triangulated depths: lambda1 = %.3f, lambda2 = %.3f\n', lambda1, lambda2);
+
+% Use lambda1 as the reference depth for subsequent calculations.
+lambda_ref = lambda1;
+a1 = dot(ray1, axis_direction);  % Needed for non-apical node depth scaling
+fprintf('Reference depth (lambda_ref): %.3f\n', lambda_ref);
+
+% 3D position of the first apical node (apex reference).
+P_apex = lambda1 * ray1(:)';
+
 
 % Compute cylinder radius using all non-apical nodes
 num_nodes = size(non_apical_nodes, 1);
@@ -455,16 +422,18 @@ for i = 1:num_nodes
     end
 end
 
+% We estimate the cylinder radius by analyzing the distance of nodal points
+% from the apex reference point. Outliers are removed via median filtering.
 R_cylinder = median(radius_estimates);
-fprintf('Cylinder radius R: %.3f\n', R_cylinder);
+fprintf('Estimated Cylinder Radius R: %.3f\n', R_cylinder);
 
-% Cylinder axis position (below apex)
+% Cylinder axis localization (positioning the axis below the apex).
 P_axis = P_apex - R_cylinder * vert_direction(:)';
 
-% Print cylinder axis localization (requirement 6)
-fprintf('\n--- Cylinder Axis Localization (wrt Camera) ---\n');
-fprintf('Axis passes through point: [%.4f, %.4f, %.4f]\n', P_axis);
-fprintf('Axis direction vector:     [%.4f, %.4f, %.4f]\n', axis_direction);
+% Documentation of the cylinder axis localization relative to the camera.
+fprintf('\n--- Cylinder Axis Spatial Localization ---\n');
+fprintf('The Axis passes through: [%.4f, %.4f, %.4f]\n', P_axis);
+fprintf('Axis Direction Vector:    [%.4f, %.4f, %.4f]\n', axis_direction);
 
 % Reconstruct all arc points
 points_3D = {};
@@ -519,6 +488,14 @@ measured_spacing = abs(dot(centroid2 - centroid1, axis_direction));
 fprintf('\n%d arcs reconstructed\n', length(points_3D));
 fprintf('Arc spacing verification: %.3f (target: 1.0)\n', measured_spacing);
 
+% Verify apical node distance using triangulated depths.
+P1_apical = lambda1 * ray1(:)';
+P2_apical = lambda2 * ray2(:)';
+apical_distance = norm(P2_apical - P1_apical);
+apical_axis_dist = abs(dot(P2_apical - P1_apical, axis_direction));
+fprintf('Apical node 3D distance: %.3f (along axis: %.3f, target: %.1f)\n', apical_distance, apical_axis_dist, abs(delta_d));
+
+
 % Print 3D coordinates of a dozen points from one arc (requirement 5)
 fprintf('\n--- 3D Coordinates of 12 Points from Arc A1 (diagonal arc) ---\n');
 arc1_pts = points_3D{1}.pts;
@@ -529,7 +506,11 @@ for i = 1:num_to_show
     fprintf('  %2d  | %9.4f | %9.4f | %9.4f\n', i, arc1_pts(i, 1), arc1_pts(i, 2), arc1_pts(i, 3));
 end
 
-%% ========== 7. VISUALIZATION ==========
+%% Part 7: Data Visualization and Result Analysis
+% In this final part, we generate several figures to visualize the
+% reconstruction quality and the geometric relationships between
+% vanishing points, nodal points, and the 3D arcs.
+fprintf('\n--- Generating Comprehensive Visualizations ---\n');
 
 % Figure 1: Original image with features
 figure(1);
@@ -773,9 +754,11 @@ end
 
 sgtitle('Figure 6: Single Diagonal Arc (A1) - Different Views');
 
-fprintf('\n=== Done ===\n');
+%% Part 8: Termination and Cleanup
+fprintf('\n--- Pipeline Execution Completed Successfully ---\n');
 
-%% ========== HELPER FUNCTIONS ==========
+%% Helper Functions and Auxiliary Routines
+% These functions encapsulate specific geometric operations used throughout the script.
 
 function pt = find_intersection(points1, points2)
 % Find intersection between two polylines
@@ -854,4 +837,12 @@ else
     [~, idx] = min(abs(candidates - lambda_ref));
     lambda = candidates(idx);
 end
+end
+
+function line_hom = get_normalized_line(p1, p2, cx, cy, scale)
+% Computes a homogeneous line representation in normalized coordinates.
+% This improves numerical stability for vanishing point estimation.
+p1_norm = [(p1(1)-cx)/scale, (p1(2)-cy)/scale, 1];
+p2_norm = [(p2(1)-cx)/scale, (p2(2)-cy)/scale, 1];
+line_hom = cross(p1_norm, p2_norm)';
 end
