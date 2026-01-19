@@ -561,6 +561,8 @@ lgd = legend([h_vert, h_axis, h_trans, h_apic, h_arcA, h_arcB], ...
     {'Vertical Lines', 'Axis Lines', 'Transversal Lines', 'Apical Line', 'Arcs A (cyan)', 'Arcs B (magenta)'}, ...
     'Location', 'best');
 set(lgd, 'Color', [0.2 0.2 0.2], 'TextColor', 'w');  % Dark background with white text
+print(gcf, 'Report/Images/figure1_original_features.png', '-dpng', '-r300');
+fprintf('  Saved: Report/Images/figure1_original_features.png\n');
 
 % Figure 2: Vanishing Points and Vanishing Line
 figure(2);
@@ -638,6 +640,8 @@ h_vp_t = plot(NaN, NaN, 'ro', 'MarkerSize', 12, 'LineWidth', 2);
 legend([h_vl, h_vp_v, h_vp_a, h_vp_t], ...
     {'Vanishing Line', 'Vertical VP', 'Axis VP', 'Transversal VP'}, ...
     'Location', 'best');
+print(gcf, 'Report/Images/figure2_vanishing_points.png', '-dpng', '-r300');
+fprintf('  Saved: Report/Images/figure2_vanishing_points.png\n');
 
 % Figure 3: Rectified image with nodal points
 figure(3);
@@ -664,6 +668,8 @@ end
 h_apical = plot(NaN, NaN, 'yo', 'MarkerSize', 12, 'LineWidth', 2);
 h_nonapical = plot(NaN, NaN, 'ro', 'MarkerSize', 8, 'LineWidth', 1);
 legend([h_apical, h_nonapical], {'Apical Nodes (N_ii)', 'Non-Apical Nodes (N_ij)'}, 'Location', 'best');
+print(gcf, 'Report/Images/figure3_rectified.png', '-dpng', '-r300');
+fprintf('  Saved: Report/Images/figure3_rectified.png\n');
 
 % Figure 4: Full 3D reconstruction
 figure(4);
@@ -692,6 +698,8 @@ ylabel('Y');
 zlabel('Z');
 title(sprintf('Figure 4: Full 3D Reconstruction (R = %.2f)', R_cylinder));
 view(3);
+print(gcf, 'Report/Images/figure4_3d_reconstruction.png', '-dpng', '-r300');
+fprintf('  Saved: Report/Images/figure4_3d_reconstruction.png\n');
 
 % Figure 5: Multiple views of full reconstruction
 figure(5);
@@ -727,6 +735,8 @@ for v = 1:4
 end
 
 sgtitle('Figure 5: 3D Reconstruction - Multiple Views');
+print(gcf, 'Report/Images/figure5_multiple_views.png', '-dpng', '-r300');
+fprintf('  Saved: Report/Images/figure5_multiple_views.png\n');
 
 % Figure 6: ONE curved arc with different views (Part 2 requirement 3)
 figure(6);
@@ -753,6 +763,8 @@ for v = 1:4
 end
 
 sgtitle('Figure 6: Single Diagonal Arc (A1) - Different Views');
+print(gcf, 'Report/Images/figure6_single_arc.png', '-dpng', '-r300');
+fprintf('  Saved: Report/Images/figure6_single_arc.png\n');
 
 %% Part 8: Termination and Cleanup
 fprintf('\n--- Pipeline Execution Completed Successfully ---\n');
