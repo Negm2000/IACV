@@ -106,81 +106,7 @@ fprintf('Computed Vertical VP: (%.1f, %.1f)\n', v_vert_pixel(1), v_vert_pixel(2)
 fprintf('Computed Axis VP:     (%.1f, %.1f)\n', v_axis_pixel(1), v_axis_pixel(2));
 fprintf('Computed Trans VP:    (%.1f, %.1f)\n', v_trans_pixel(1), v_trans_pixel(2));
 
-%% Part 3: Projective and Metric Rectification
-% This stage is dedicated to removing perspective distortion from the image.
-% By identifying the vanishing line, we can apply a transformation that maps
-% it back to infinity, effectively making parallel lines in the scene parallel
-% in the rectified image.
-fprintf('\n--- Executing Metric Rectification ---\n');
-
-% Step 1: Affine rectification.
-% We normalize the vanishing line and construct a homography that stabilizes the plane.
-l = vanishing_line(:) / vanishing_line(3);
-H_affine = [1, 0, 0; 0, 1, 0; l(1), l(2), 1];
-
-% Step 2: Metric rectification.
-% Here we use the knowledge that vertical and transversal directions are
-% orthogonal in the physical world to recover the correct aspect ratio.
-v_vert_affine = H_affine * v_vert_pixel(:);
-v_trans_affine = H_affine * v_trans_pixel(:);
-
-dir_vert = v_vert_affine(1:2) / norm(v_vert_affine(1:2));
-dir_trans = v_trans_affine(1:2) / norm(v_trans_affine(1:2));
-
-M = [dir_vert, dir_trans];
-S_metric = [0, 1; 1, 0] * inv(M);
-H_metric = [S_metric, [0; 0]; 0, 0, 1];
-
-H_rectify = H_metric * H_affine;
-
-% In order to visualize the result properly, we need to compute the output bounds.
-% We sample a grid of points to determine where the image content maps to.
-[xx, yy] = meshgrid(linspace(1, cols, 40), linspace(1, rows, 40));
-grid_points = [xx(:), yy(:), ones(numel(xx), 1)]';
-
-grid_vals = H_affine(3, :) * grid_points;
-side = sign(mean(grid_vals));
-if side == 0
-    side = 1;
-end
-
-% We apply a validity mask to focus on the points that are not near the vanishing line.
-margin = 0.15 * abs(max(grid_vals) - min(grid_vals));
-valid_mask = (sign(grid_vals) == side) & (abs(grid_vals) > margin);
-if sum(valid_mask) < 10
-    valid_mask = (sign(grid_vals) == side);
-end
-
-pts_transformed = H_rectify * grid_points(:, valid_mask);
-pts_transformed = pts_transformed(1:2, :) ./ pts_transformed(3, :);
-
-% Bounding box estimation for the rectified image.
-min_x = min(pts_transformed(1, :));
-max_x = max(pts_transformed(1, :));
-min_y = min(pts_transformed(2, :));
-max_y = max(pts_transformed(2, :));
-
-rect_width = max_x - min_x;
-rect_height = max_y - min_y;
-
-
-% Scaling the rectified result to a standard presentation width (2000 pixels).
-target_width = 2000;
-scale_factor = target_width / rect_width;
-
-% Final transformation including translation to positive coordinates.
-T_output = [scale_factor, 0, -scale_factor*min_x + 1; ...
-    0, scale_factor, -scale_factor*min_y + 1; ...
-    0, 0, 1];
-
-H_final = T_output * H_rectify;
-
-output_size = [ceil(scale_factor * rect_height), target_width];
-img_rectified = imwarp(img, projective2d(H_final'), 'OutputView', imref2d(output_size));
-
-fprintf('Rectified image generated with size: %d x %d\n', output_size(2), output_size(1));
-
-%% Part 4: Camera Intrinsic Calibration
+%% Part 3: Camera Intrinsic Calibration
 % In this stage, we estimate the camera intrinsic matrix (K) using the property
 % of orthogonal vanishing points. This allows us to recover the focal length
 % and the principal point.
@@ -237,6 +163,90 @@ end
 
 fprintf('Focal Parameters: fx = %.1f, fy = %.1f\n', K(1,1), K(2,2));
 fprintf('Principal Point Offset: (%.1f, %.1f)\n', K(1,3), K(2,3));
+
+%% Part 4: Projective and Metric Rectification
+% This stage is dedicated to removing perspective distortion from the image.
+% Instead of using a simple shortcut, we use the calibration matrix K and
+% the 3D directions of the vanishing points to recover the metric plane.
+fprintf('\n--- Executing Metric Rectification ---\n');
+
+% Compute 3D directions of vanishing points in the camera frame
+K_inv = inv(K);
+r2 = K_inv * v_vert_pixel(:); % Vertical direction -> Y axis
+r2 = r2 / norm(r2);
+
+r1 = K_inv * v_trans_pixel(:); % Transversal direction -> X axis
+r1 = r1 / norm(r1);
+
+% To handle potential noise (making them perfectly orthogonal for R)
+% We keep r2 (vertical) as the primary axis and re-derive r1
+r3 = cross(r1, r2);
+r3 = r3 / norm(r3);
+r1_ortho = cross(r2, r3);
+
+% The rectification homography is H = R' * K^-1
+% where R = [r1, r2, r3] maps 3D points [X, Y, 1] to rays in the camera frame.
+R = [r1_ortho, r2, r3];
+H_rectify = R' * K_inv;
+
+% To ensure the image is "upright" (transversal is X, vertical is Y)
+% and to maintain consistency with the previous pipeline's "Safe Warp":
+% We analyze the vanishing line behavior.
+l_inf = H_rectify(3, :);
+
+% In order to visualize the result properly, we need to compute the output bounds.
+% We sample a grid of points to determine where the image content maps to.
+[xx, yy] = meshgrid(linspace(1, cols, 40), linspace(1, rows, 40));
+grid_points = [xx(:), yy(:), ones(numel(xx), 1)]';
+
+grid_vals = l_inf * grid_points;
+side = sign(mean(grid_vals));
+if side == 0
+    side = 1;
+end
+
+% We apply a validity mask to focus on the points that are not near the vanishing line.
+margin = 0.15 * abs(max(grid_vals) - min(grid_vals));
+valid_mask = (sign(grid_vals) == side) & (abs(grid_vals) > margin);
+if sum(valid_mask) < 10
+    valid_mask = (sign(grid_vals) == side);
+end
+
+pts_transformed = H_rectify * grid_points(:, valid_mask);
+pts_transformed = pts_transformed(1:2, :) ./ pts_transformed(3, :);
+
+% Bounding box estimation for the rectified image.
+min_x = min(pts_transformed(1, :));
+max_x = max(pts_transformed(1, :));
+min_y = min(pts_transformed(2, :));
+max_y = max(pts_transformed(2, :));
+
+rect_width = max_x - min_x;
+rect_height = max_y - min_y;
+
+% Aspect ratio clamping to prevent excessive distortion in the visualization.
+if rect_height > 5 * rect_width
+    rect_height = 5 * rect_width;
+end
+if rect_width > 5 * rect_height
+    rect_width = 5 * rect_height;
+end
+
+% Scaling the rectified result to a standard presentation width (2000 pixels).
+target_width = 2000;
+scale_factor = target_width / rect_width;
+
+% Final transformation including translation to positive coordinates.
+T_output = [scale_factor, 0, -scale_factor*min_x + 1; ...
+    0, scale_factor, -scale_factor*min_y + 1; ...
+    0, 0, 1];
+
+H_final = T_output * H_rectify;
+
+output_size = [ceil(scale_factor * rect_height), target_width];
+img_rectified = imwarp(img, projective2d(H_final'), 'OutputView', imref2d(output_size));
+
+fprintf('Rectified image generated with size: %d x %d\n', output_size(2), output_size(1));
 
 %% Part 5: Determination of Nodal Points
 % Nodal points are the critical intersection points of the vault's arcs.
@@ -748,7 +758,7 @@ end
 sgtitle('Figure 6: Single Diagonal Arc (A1) - Different Views');
 
 %% Part 8: Termination and Cleanup
-fprintf('\n--- Completed Successfully ---\n');
+fprintf('\n--- Pipeline Execution Completed Successfully ---\n');
 
 %% Helper Functions and Auxiliary Routines
 % These functions encapsulate specific geometric operations used throughout the script.
