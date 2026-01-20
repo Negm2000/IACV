@@ -137,182 +137,71 @@ M = [u, v];
 S_metric_init = inv(M); % Maps u -> [1;0] and v -> [0;1]
 H_metric_vp = [S_metric_init, [0; 0]; 0, 0, 1];
 
-%% Part 3b: Metric Rectification via Independent Line Pairs
-% This method recovers the metric structure of the plane by solving for the
-% image of the dual conic C* using two pairs of orthogonal lines.
-% Hard-coded selection: Pair 1 (v4, t1) and Pair 2 (v6, t6)
-% Ref: Lecture G - Stratified Rectification from Orthogonal Lines.
-fprintf('\n--- Part 3b: Metric Rectification (Hard-coded Line Pairs) ---\n');
+%% Part 3b: Stratified Metric Rectification (Circular Assumption)
+% Two constraints: (1) Orthogonality fixes skew, (2) Circular profile fixes aspect ratio.
+fprintf('\n--- Part 3b: Metric Rectification (Circular Assumption) ---\n');
 
-% Hard-coded line pair indices
-v1_idx = 4;  t1_idx = 1;  % Pair 1: v4 + t1
-v2_idx = 6;  t2_idx = 6;  % Pair 2: v6 + t6
+% CONSTRAINT 1: Orthogonality (fixes skew)
+H_ortho = [S_metric_init, [0;0]; 0 0 1];
+H_affine_ortho = H_ortho * H_affine;
 
-fprintf('Selected Line Pairs:\n');
-fprintf('  Pair 1: v%d + t%d\n', v1_idx, t1_idx);
-fprintf('  Pair 2: v%d + t%d\n', v2_idx, t2_idx);
-
-% Get line structures
-L1 = lines_v(v1_idx);
-M1 = lines_trans(t1_idx);
-L2 = lines_v(v2_idx);
-M2 = lines_trans(t2_idx);
-
-% 1. VISUALIZE SELECTED LINE PAIRS
-figure(10);  % Use specific figure number for easy identification
-clf;  % Clear figure
-imshow(img); hold on;
-title(sprintf('Figure 10: Metric Rectification - Pair 1 (v%d+t%d), Pair 2 (v%d+t%d)', v1_idx, t1_idx, v2_idx, t2_idx), 'FontSize', 14);
-
-% Plot all features in light colors
-for i = 1:length(lines_v)
-    plot([lines_v(i).p1(1), lines_v(i).p2(1)], [lines_v(i).p1(2), lines_v(i).p2(2)], ...
-        'b-', 'LineWidth', 1, 'Color', [0.6 0.6 1]);
-    text(mean([lines_v(i).p1(1), lines_v(i).p2(1)]), mean([lines_v(i).p1(2), lines_v(i).p2(2)]), ...
-        sprintf('v%d', i), 'Color', [0.4 0.4 0.8], 'FontSize', 8);
-end
-for i = 1:length(lines_trans)
-    plot([lines_trans(i).p1(1), lines_trans(i).p2(1)], [lines_trans(i).p1(2), lines_trans(i).p2(2)], ...
-        'r-', 'LineWidth', 1, 'Color', [1 0.6 0.6]);
-    text(mean([lines_trans(i).p1(1), lines_trans(i).p2(1)]), mean([lines_trans(i).p1(2), lines_trans(i).p2(2)]), ...
-        sprintf('t%d', i), 'Color', [0.8 0.4 0.4], 'FontSize', 8);
-end
-
-% Highlight selected lines with thick bright colors AND extend them
-% Helper function to extend a line segment
-extend_factor = 3;  % Extend lines by this factor beyond their endpoints
-
-% Function to extend line endpoints
-extend_line = @(p1, p2, factor) deal(...
-    p1 - factor * (p2 - p1), ...  % Extended start
-    p2 + factor * (p2 - p1));     % Extended end
-
-% Function to compute line intersection
-line_intersect = @(L1, L2) cross(...
-    cross([L1.p1, 1], [L1.p2, 1]), ...
-    cross([L2.p1, 1], [L2.p2, 1]));
-
-% Function to compute angle between two lines at their intersection
-compute_angle = @(L1, L2) acosd(abs(...
-    dot([L1.p2-L1.p1], [L2.p2-L2.p1]) / ...
-    (norm(L1.p2-L1.p1) * norm(L2.p2-L2.p1))));
-
-% === PAIR 1: v4 (blue) and t1 (red) ===
-% Extend L1 (vertical)
-[L1_ext_start, L1_ext_end] = extend_line(L1.p1, L1.p2, extend_factor);
-plot([L1_ext_start(1), L1_ext_end(1)], [L1_ext_start(2), L1_ext_end(2)], 'b--', 'LineWidth', 2);
-plot([L1.p1(1), L1.p2(1)], [L1.p1(2), L1.p2(2)], 'b-', 'LineWidth', 4);
-
-% Extend M1 (transversal)
-[M1_ext_start, M1_ext_end] = extend_line(M1.p1, M1.p2, extend_factor);
-plot([M1_ext_start(1), M1_ext_end(1)], [M1_ext_start(2), M1_ext_end(2)], 'r--', 'LineWidth', 2);
-plot([M1.p1(1), M1.p2(1)], [M1.p1(2), M1.p2(2)], 'r-', 'LineWidth', 4);
-
-% Find intersection of Pair 1
-int1_hom = line_intersect(L1, M1);
-int1 = int1_hom(1:2) / int1_hom(3);
-angle1 = compute_angle(L1, M1);
-
-% Mark intersection and show angle
-plot(int1(1), int1(2), 'ko', 'MarkerSize', 15, 'LineWidth', 3, 'MarkerFaceColor', 'y');
-text(int1(1)+30, int1(2)-30, sprintf('Pair 1\n%.1f°', angle1), ...
-    'Color', 'k', 'FontSize', 11, 'FontWeight', 'bold', 'BackgroundColor', 'y');
-
-% Labels
-text(mean([L1.p1(1), L1.p2(1)])-50, mean([L1.p1(2), L1.p2(2)]), sprintf('v%d', v1_idx), ...
-    'Color', 'b', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
-text(mean([M1.p1(1), M1.p2(1)]), mean([M1.p1(2), M1.p2(2)])-40, sprintf('t%d', t1_idx), ...
-    'Color', 'r', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
-
-% === PAIR 2: v6 (cyan) and t6 (magenta) ===
-% Extend L2 (vertical)
-[L2_ext_start, L2_ext_end] = extend_line(L2.p1, L2.p2, extend_factor);
-plot([L2_ext_start(1), L2_ext_end(1)], [L2_ext_start(2), L2_ext_end(2)], 'c--', 'LineWidth', 2);
-plot([L2.p1(1), L2.p2(1)], [L2.p1(2), L2.p2(2)], 'c-', 'LineWidth', 4);
-
-% Extend M2 (transversal)
-[M2_ext_start, M2_ext_end] = extend_line(M2.p1, M2.p2, extend_factor);
-plot([M2_ext_start(1), M2_ext_end(1)], [M2_ext_start(2), M2_ext_end(2)], 'm--', 'LineWidth', 2);
-plot([M2.p1(1), M2.p2(1)], [M2.p1(2), M2.p2(2)], 'm-', 'LineWidth', 4);
-
-% Find intersection of Pair 2
-int2_hom = line_intersect(L2, M2);
-int2 = int2_hom(1:2) / int2_hom(3);
-angle2 = compute_angle(L2, M2);
-
-% Mark intersection and show angle
-plot(int2(1), int2(2), 'ko', 'MarkerSize', 15, 'LineWidth', 3, 'MarkerFaceColor', 'g');
-text(int2(1)+30, int2(2)-30, sprintf('Pair 2\n%.1f°', angle2), ...
-    'Color', 'k', 'FontSize', 11, 'FontWeight', 'bold', 'BackgroundColor', 'g');
-
-% Labels
-text(mean([L2.p1(1), L2.p2(1)])-50, mean([L2.p1(2), L2.p2(2)]), sprintf('v%d', v2_idx), ...
-    'Color', 'c', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
-text(mean([M2.p1(1), M2.p2(1)]), mean([M2.p1(2), M2.p2(2)])-40, sprintf('t%d', t2_idx), ...
-    'Color', 'm', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
-
-% Print angles to console
-fprintf('Pair 1 (v%d + t%d): Angle = %.2f degrees\n', v1_idx, t1_idx, angle1);
-fprintf('Pair 2 (v%d + t%d): Angle = %.2f degrees\n', v2_idx, t2_idx, angle2);
-fprintf('Note: These pairs are KNOWN to be orthogonal (90°) in the real world.\n');
-
-% Add legend
-h1 = plot(NaN, NaN, 'b-', 'LineWidth', 4);
-h2 = plot(NaN, NaN, 'r-', 'LineWidth', 4);
-h3 = plot(NaN, NaN, 'c-', 'LineWidth', 4);
-h4 = plot(NaN, NaN, 'm-', 'LineWidth', 4);
-h5 = plot(NaN, NaN, 'ko', 'MarkerSize', 10, 'MarkerFaceColor', 'y');
-legend([h1, h2, h3, h4, h5], {sprintf('v%d (Pair 1)', v1_idx), sprintf('t%d (Pair 1)', t1_idx), ...
-    sprintf('v%d (Pair 2)', v2_idx), sprintf('t%d (Pair 2)', t2_idx), 'Intersection'}, 'Location', 'best');
-
-% 2. COMPUTE METRIC RECTIFICATION
-transform_line = @(L, H) cross((H*[L.p1, 1]')', (H*[L.p2, 1]')');
-
-% Transform to affine space
-l1_a = transform_line(L1, H_affine);
-m1_a = transform_line(M1, H_affine);
-l2_a = transform_line(L2, H_affine);
-m2_a = transform_line(M2, H_affine);
-
-% Normalize lines
-l1_a = l1_a / l1_a(3); m1_a = m1_a / m1_a(3);
-l2_a = l2_a / l2_a(3); m2_a = m2_a / m2_a(3);
-
-% Build constraint matrix for S
-A_metric = [l1_a(1)*m1_a(1), (l1_a(1)*m1_a(2) + l1_a(2)*m1_a(1)), l1_a(2)*m1_a(2);
-    l2_a(1)*m2_a(1), (l2_a(1)*m2_a(2) + l2_a(2)*m2_a(1)), l2_a(2)*m2_a(2)];
-
-% Check rank
-if rank(A_metric) < 2
-    warning('Selected line pairs are linearly dependent. Using VP-based fallback.');
-    H_metric = H_metric_vp;
-else
-    % Solve for S parameters
-    [~, ~, V_s] = svd(A_metric);
-    s_params = V_s(:, end);
-    S = [s_params(1), s_params(2); s_params(2), s_params(3)];
-
-    % Ensure positive definiteness
-    if det(S) < 0 || S(1,1) < 0, S = -S; end
-
-    if det(S) <= 0 || S(1,1) <= 0
-        warning('S matrix not positive definite. Using VP-based fallback.');
-        H_metric = H_metric_vp;
-    else
-        % Cholesky decomposition
-        L_chol = chol(S, 'lower');
-        H_metric = [inv(L_chol), [0; 0]; 0, 0, 1];
-
-        % Report results
-        cond_S = cond(S);
-        aspect_ratio = L_chol(2,2) / L_chol(1,1);
-
-        fprintf('\nMetric Rectification Results:\n');
-        fprintf('  Condition Number of S: %.4f\n', cond_S);
-        fprintf('  Aspect Ratio: %.4f\n', aspect_ratio);
-        fprintf('Metric rectification successful.\n');
+% Step 1: Find nodal points from arc intersections (using helper function)
+nodal_pts_img = [];
+for i = 1:length(arcs_A)
+    for j = 1:length(arcs_B)
+        pt = find_intersection(arcs_A{i}, arcs_B{j});
+        if ~isempty(pt)
+            nodal_pts_img = [nodal_pts_img; pt];
+        end
     end
 end
+
+% Transform nodal points to affine-orthogonal space
+nodal_pts_hom = [nodal_pts_img, ones(size(nodal_pts_img,1), 1)]';
+nodal_pts_ao = H_affine_ortho * nodal_pts_hom;
+nodal_pts_ao = (nodal_pts_ao(1:2,:) ./ nodal_pts_ao(3,:))';
+
+% CONSTRAINT 2: Circular Profile (fixes aspect ratio λ)
+% Identify Apex (A): Point with minimum Y
+[~, apex_idx] = min(nodal_pts_ao(:,2));
+A = nodal_pts_ao(apex_idx,:);
+
+% Springing Level (Y_C): Use median Y of the lowest nodal points
+[~, sort_y_idx] = sort(nodal_pts_ao(:,2), 'descend');
+Y_springing = median(nodal_pts_ao(sort_y_idx(1:min(4, length(sort_y_idx))), 2));
+C = [A(1), Y_springing]; % Center on vertical through apex
+
+% Solve for λ: dist(C, A) = dist(C, S)
+lambda_estimates = [];
+for i = 1:size(nodal_pts_ao, 1)
+    if i == apex_idx, continue; end
+    S = nodal_pts_ao(i,:);
+    num = (S(1)-C(1))^2 - (A(1)-C(1))^2;
+    den = (A(2)-C(2))^2 - (S(2)-C(2))^2;
+    if abs(den) > 1e-6
+        lam_sq = num / den;
+        if lam_sq > 0.01 && lam_sq < 100
+            lambda_estimates = [lambda_estimates; sqrt(lam_sq)];
+        end
+    end
+end
+
+if ~isempty(lambda_estimates)
+    best_lambda = median(lambda_estimates);
+    fprintf('λ estimates: range=[%.3f, %.3f], samples=[%s]\n', ...
+        min(lambda_estimates), max(lambda_estimates), ...
+        strjoin(arrayfun(@(x) sprintf('%.3f',x), lambda_estimates(1:min(5,end)), 'UniformOutput', false), ', '));
+    fprintf('Constraint 2 (Circular): λ = %.4f (median of %d estimates)\n', ...
+        best_lambda, length(lambda_estimates));
+else
+    best_lambda = 1.0;
+    fprintf('Constraint 2: No valid λ found, using 1.0\n');
+end
+
+% Construct final H_metric
+H_scale = [1, 0, 0; 0, best_lambda, 0; 0, 0, 1];
+H_metric = H_scale * H_ortho;
+fprintf('Metric rectification complete: AR=%.4f\n', best_lambda);
 
 % Final combined homography
 H_rectify = H_metric * H_affine;
@@ -400,110 +289,39 @@ img_rectified = imwarp(img, projective2d(H_final'), 'OutputView', imref2d(output
 
 fprintf('Rectified image generated with size: %d x %d\n', output_size(2), output_size(1));
 
-%% Part 4: Camera Intrinsic Calibration (Robust IAC Method)
-% We estimate K without assuming fx=fy or centered principal point.
-% We use the Image of the Absolute Conic (omega).
-% Assumption: Zero skew (given), but unknown Aspect Ratio and Principal Point.
+%% Part 4: Camera Intrinsic Calibration (IAC Method)
+% Estimate K using the Image of the Absolute Conic (omega).
+fprintf('\n--- Computing Camera Calibration matrix K ---\n');
 
-fprintf('\n--- Computing Camera Calibration matrix K (General Method) ---\n');
-
-% 1. Collect Constraints
-% We define omega as symmetric with zero skew:
-% omega = [x1  0  x3]
-%         [ 0 x2  x4]
-%         [x3 x4  x5]
-% The vector of unknowns is x = [x1, x2, x3, x4, x5]'.
-
-A_iac = [];
-
-% Constraint Set A: Vanishing Points Orthogonality
-% vi' * omega * vj = 0 for orthogonal directions
+% Build constraints from vanishing point orthogonality
 vps = {v_vert_pixel, v_axis_pixel, v_trans_pixel};
-pairs = [1 2; 1 3; 2 3]; % (Vert-Axis), (Vert-Trans), (Axis-Trans)
-
+pairs = [1 2; 1 3; 2 3];
+A_iac = [];
 for k = 1:size(pairs, 1)
-    u = vps{pairs(k, 1)};
-    v = vps{pairs(k, 2)};
-
-    % Expansion of u' * omega * v = 0 with zero skew structure
-    % x1(u1v1) + x2(u2v2) + x3(u1v3+u3v1) + x4(u2v3+u3v2) + x5(u3v3) = 0
-    row = [u(1)*v(1), ...
-        u(2)*v(2), ...
-        u(1)*v(3) + u(3)*v(1), ...
-        u(2)*v(3) + u(3)*v(2), ...
-        u(3)*v(3)];
-    A_iac = [A_iac; row];
+    u = vps{pairs(k,1)}; v = vps{pairs(k,2)};
+    A_iac = [A_iac; u(1)*v(1), u(2)*v(2), u(1)*v(3)+u(3)*v(1), u(2)*v(3)+u(3)*v(2), u(3)*v(3)];
 end
 
-% Constraint Set B: Scene Geometry from Rectification
-% We use the rectification homography H_rectify computed in Part 3.
-% This maps Image -> World (Metric).
-% Therefore H_inv = inv(H_rectify) maps World -> Image.
-% The columns of H_inv represent the World X and Y axes in the Image.
-H_img_to_world = H_rectify; % From your Part 3
-H_world_to_img = inv(H_img_to_world);
+% Add constraints from rectification homography
+H_world_to_img = inv(H_rectify);
+h1 = H_world_to_img(:,1); h2 = H_world_to_img(:,2);
+A_iac = [A_iac; h1(1)*h2(1), h1(2)*h2(2), h1(1)*h2(3)+h1(3)*h2(1), h1(2)*h2(3)+h1(3)*h2(2), h1(3)*h2(3)];
+t1 = [h1(1)^2, h1(2)^2, 2*h1(1)*h1(3), 2*h1(2)*h1(3), h1(3)^2];
+t2 = [h2(1)^2, h2(2)^2, 2*h2(1)*h2(3), 2*h2(2)*h2(3), h2(3)^2];
+A_iac = [A_iac; t1-t2];
 
-h1 = H_world_to_img(:, 1); % Image of World X axis
-h2 = H_world_to_img(:, 2); % Image of World Y axis
-
-% Constraint 4: Rectified axes are orthogonal in 3D (h1' * omega * h2 = 0)
-u = h1; v = h2;
-row_ortho = [u(1)*v(1), ...
-    u(2)*v(2), ...
-    u(1)*v(3) + u(3)*v(1), ...
-    u(2)*v(3) + u(3)*v(2), ...
-    u(3)*v(3)];
-A_iac = [A_iac; row_ortho];
-
-% Constraint 5: Rectified axes have equal scale (h1' * omega * h1 = h2' * omega * h2)
-% Equivalent to: h1' * omega * h1 - h2' * omega * h2 = 0
-% Term 1 (h1, h1)
-t1 = [h1(1)*h1(1), h1(2)*h1(2), 2*h1(1)*h1(3), 2*h1(2)*h1(3), h1(3)*h1(3)];
-% Term 2 (h2, h2)
-t2 = [h2(1)*h2(1), h2(2)*h2(2), 2*h2(1)*h2(3), 2*h2(2)*h2(3), h2(3)*h2(3)];
-
-A_iac = [A_iac; (t1 - t2)];
-
-% 2. Solve for omega using SVD
+% Solve for omega and extract K
 [~, ~, V_calib] = svd(A_iac);
-x = V_calib(:, end);
+x = V_calib(:,end);
+omega = [x(1), 0, x(3); 0, x(2), x(4); x(3), x(4), x(5)];
+if det(omega) < 0, omega = -omega; end
 
-% Reconstruct omega matrix
-omega = [x(1), 0,    x(3); ...
-    0,    x(2), x(4); ...
-    x(3), x(4), x(5)];
+C = chol(omega, 'upper');
+K = inv(C);
+K = K / K(3,3);
+if K(1,1) < 0, K = -K; end
 
-% 3. Extract K using Cholesky Factorization
-% omega = inv(K * K')
-% K_inv = cholesky(omega)
-try
-    % Force positive definiteness if flip occurred during SVD
-    if det(omega) < 0
-        omega = -omega;
-    end
-
-    C = chol(omega, 'upper'); % C such that C'*C = omega
-    K = inv(C);               % K is the inverse of the Cholesky factor
-
-    % Normalize K so K(3,3) = 1
-    K = K / K(3,3);
-
-    % Ensure positive focal lengths
-    if K(1,1) < 0, K = -K; end
-
-    fprintf('Robust Calibration Successful.\n');
-    fprintf('f_x = %.2f\n', K(1,1));
-    fprintf('f_y = %.2f\n', K(2,2));
-    fprintf('Aspect Ratio = %.4f\n', K(1,1)/K(2,2));
-    fprintf('Principal Point = (%.2f, %.2f)\n', K(1,3), K(2,3));
-
-catch
-    warning('Cholesky decomposition failed. Matrix omega may not be positive definite due to feature noise.');
-    % Fallback to simplified model ONLY if math fails significantly
-    fprintf('Falling back to simplified calibration for stability.\n');
-    K = [2000, 0, cx; 0, 2000, cy; 0, 0, 1];
-end
-
+fprintf('K calibrated: fx=%.1f, fy=%.1f, pp=(%.1f,%.1f)\n', K(1,1), K(2,2), K(1,3), K(2,3));
 
 %% Part 5: Determination of Nodal Points
 % Nodal points are the critical intersection points of the vault's arcs.
@@ -778,10 +596,12 @@ imshow(img);
 title('Figure 1: Original Image with Extracted Features');
 hold on;
 
-% Draw vertical lines (black)
+% Draw vertical lines (black) with labels
 for i = 1:length(lines_v)
     L = lines_v(i);
     plot([L.p1(1), L.p2(1)], [L.p1(2), L.p2(2)], 'k-', 'LineWidth', 2);
+    text(mean([L.p1(1), L.p2(1)]), mean([L.p1(2), L.p2(2)]), sprintf('v%d', i), ...
+        'Color', 'k', 'FontSize', 9, 'FontWeight', 'bold', 'BackgroundColor', [0.9 0.9 0.9]);
 end
 
 % Draw axis lines (green)
@@ -790,10 +610,12 @@ for i = 1:length(lines_axis)
     plot([L.p1(1), L.p2(1)], [L.p1(2), L.p2(2)], 'g-', 'LineWidth', 2);
 end
 
-% Draw transversal lines (white)
+% Draw transversal lines (white) with labels
 for i = 1:length(lines_trans)
     L = lines_trans(i);
     plot([L.p1(1), L.p2(1)], [L.p1(2), L.p2(2)], 'w-', 'LineWidth', 2);
+    text(mean([L.p1(1), L.p2(1)]), mean([L.p1(2), L.p2(2)]), sprintf('t%d', i), ...
+        'Color', 'w', 'FontSize', 9, 'FontWeight', 'bold', 'BackgroundColor', [0.2 0.2 0.2]);
 end
 
 % Draw apical line (yellow)
@@ -812,15 +634,19 @@ for i = 2:length(arcs_B)
     plot(arcs_B{i}(:,1), arcs_B{i}(:,2), 'm.-', 'MarkerSize', 8);
 end
 
+% Plot nodal points (arc intersections used for λ constraint)
+h_nodal = plot(nodal_pts_img(:,1), nodal_pts_img(:,2), 'yo', 'MarkerSize', 12, ...
+    'LineWidth', 2, 'MarkerFaceColor', 'y');
+
 % Create proper legend with handles
 h_vert = plot(NaN, NaN, 'k-', 'LineWidth', 2);
 h_axis = plot(NaN, NaN, 'g-', 'LineWidth', 2);
 h_trans = plot(NaN, NaN, 'w-', 'LineWidth', 2);
 h_apic = plot(NaN, NaN, 'y-', 'LineWidth', 3);
-lgd = legend([h_vert, h_axis, h_trans, h_apic, h_arcA, h_arcB], ...
-    {'Vertical Lines', 'Axis Lines', 'Transversal Lines', 'Apical Line', 'Arcs A (cyan)', 'Arcs B (magenta)'}, ...
+lgd = legend([h_vert, h_axis, h_trans, h_apic, h_arcA, h_arcB, h_nodal], ...
+    {'Vertical', 'Axis', 'Transversal', 'Apical', 'Arcs A', 'Arcs B', 'Nodal Points'}, ...
     'Location', 'best');
-set(lgd, 'Color', [0.2 0.2 0.2], 'TextColor', 'w');  % Dark background with white text
+set(lgd, 'Color', [0.2 0.2 0.2], 'TextColor', 'w');
 
 % Figure 2: Vanishing Points and Vanishing Line
 figure(2);
@@ -1101,38 +927,7 @@ end
 
 function line_hom = get_normalized_line(p1, p2, cx, cy, scale)
 % Computes a homogeneous line representation in normalized coordinates.
-% This improves numerical stability for vanishing point estimation.
 p1_norm = [(p1(1)-cx)/scale, (p1(2)-cy)/scale, 1];
 p2_norm = [(p2(1)-cx)/scale, (p2(2)-cy)/scale, 1];
 line_hom = cross(p1_norm, p2_norm)';
-end
-
-function out = ternary(cond, a, b)
-% Simple ternary operator implementation
-if cond, out = a; else, out = b; end
-end
-
-function plot_labeled_line_set(lines, color, prefix)
-% Helper function to plot and label a set of lines
-for i = 1:length(lines)
-    plot([lines(i).p1(1), lines(i).p2(1)], [lines(i).p1(2), lines(i).p2(2)], color, 'LineWidth', 2);
-    text(mean([lines(i).p1(1), lines(i).p2(1)]), mean([lines(i).p1(2), lines(i).p2(2)]), ...
-        sprintf('%s%d', prefix, i), 'Color', color, 'FontSize', 10, 'FontWeight', 'bold');
-end
-end
-
-function line = get_line_by_idx(idx, lines_v, lines_trans, lines_axis, line_apical)
-% Local function to map a string index (e.g. 'v1', 't6') to the correct line structure.
-idx = lower(idx);
-num = str2double(idx(2:end));
-
-if startsWith(idx, 'v') || startsWith(idx, 'l')
-    line = lines_v(num);
-elseif startsWith(idx, 't')
-    line = lines_trans(num);
-elseif startsWith(idx, 'a')
-    line = lines_axis(num);
-else
-    line = line_apical;
-end
 end
