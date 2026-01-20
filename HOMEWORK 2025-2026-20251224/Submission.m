@@ -137,229 +137,293 @@ M = [u, v];
 S_metric_init = inv(M); % Maps u -> [1;0] and v -> [0;1]
 H_metric_vp = [S_metric_init, [0; 0]; 0, 0, 1];
 
-%% Part 3b: Metric Rectification via Independent Line Pairs
+%% Part 3b: Metric Rectification via Independent Line Pairs (Automatic)
 % This method recovers the metric structure of the plane by solving for the
 % image of the dual conic C* using two pairs of orthogonal lines.
-% Hard-coded selection: Pair 1 (v4, t1) and Pair 2 (v6, t6)
+% We automatically try all permutations of v (vertical) and t (transversal)
+% lines to find the best combination based on the condition number of S.
 % Ref: Lecture G - Stratified Rectification from Orthogonal Lines.
-fprintf('\n--- Part 3b: Metric Rectification (Hard-coded Line Pairs) ---\n');
+fprintf('\n--- Part 3b: Metric Rectification (Automatic Permutation Search) ---\n');
 
-% Hard-coded line pair indices
-v1_idx = 4;  t1_idx = 1;  % Pair 1: v4 + t1
-v2_idx = 6;  t2_idx = 6;  % Pair 2: v6 + t6
-
-fprintf('Selected Line Pairs:\n');
-fprintf('  Pair 1: v%d + t%d\n', v1_idx, t1_idx);
-fprintf('  Pair 2: v%d + t%d\n', v2_idx, t2_idx);
-
-% Get line structures
-L1 = lines_v(v1_idx);
-M1 = lines_trans(t1_idx);
-L2 = lines_v(v2_idx);
-M2 = lines_trans(t2_idx);
-
-% 1. VISUALIZE SELECTED LINE PAIRS
-figure(10);  % Use specific figure number for easy identification
-clf;  % Clear figure
+% 1. VISUALIZE FEATURES
+figure('Name', 'Part 3b: Automatic Orthogonal Line Pair Selection');
 imshow(img); hold on;
-title(sprintf('Figure 10: Metric Rectification - Pair 1 (v%d+t%d), Pair 2 (v%d+t%d)', v1_idx, t1_idx, v2_idx, t2_idx), 'FontSize', 14);
+title('Automatic Selection of Orthogonal Line Pairs (v-t permutations)');
 
-% Plot all features in light colors
-for i = 1:length(lines_v)
-    plot([lines_v(i).p1(1), lines_v(i).p2(1)], [lines_v(i).p1(2), lines_v(i).p2(2)], ...
-        'b-', 'LineWidth', 1, 'Color', [0.6 0.6 1]);
-    text(mean([lines_v(i).p1(1), lines_v(i).p2(1)]), mean([lines_v(i).p1(2), lines_v(i).p2(2)]), ...
-        sprintf('v%d', i), 'Color', [0.4 0.4 0.8], 'FontSize', 8);
-end
-for i = 1:length(lines_trans)
-    plot([lines_trans(i).p1(1), lines_trans(i).p2(1)], [lines_trans(i).p1(2), lines_trans(i).p2(2)], ...
-        'r-', 'LineWidth', 1, 'Color', [1 0.6 0.6]);
-    text(mean([lines_trans(i).p1(1), lines_trans(i).p2(1)]), mean([lines_trans(i).p1(2), lines_trans(i).p2(2)]), ...
-        sprintf('t%d', i), 'Color', [0.8 0.4 0.4], 'FontSize', 8);
-end
+% Plot features
+plot_labeled_line_set(lines_v, 'b', 'v'); % Vertical in Blue
+plot_labeled_line_set(lines_trans, 'r', 't'); % Transversal in Red
+if ~isempty(lines_axis), plot_labeled_line_set(lines_axis, 'g', 'a'); end % Axis in Green
+if ~isempty(line_apical), plot([line_apical.p1(1), line_apical.p2(1)], [line_apical.p1(2), line_apical.p2(2)], 'y-', 'LineWidth', 3); text(mean([line_apical.p1(1), line_apical.p2(1)]), mean([line_apical.p1(2), line_apical.p2(2)]), 'APIC', 'Color', 'y'); end
 
-% Highlight selected lines with thick bright colors AND extend them
-% Helper function to extend a line segment
-extend_factor = 3;  % Extend lines by this factor beyond their endpoints
-
-% Function to extend line endpoints
-extend_line = @(p1, p2, factor) deal(...
-    p1 - factor * (p2 - p1), ...  % Extended start
-    p2 + factor * (p2 - p1));     % Extended end
-
-% Function to compute line intersection
-line_intersect = @(L1, L2) cross(...
-    cross([L1.p1, 1], [L1.p2, 1]), ...
-    cross([L2.p1, 1], [L2.p2, 1]));
-
-% Function to compute angle between two lines at their intersection
-compute_angle = @(L1, L2) acosd(abs(...
-    dot([L1.p2-L1.p1], [L2.p2-L2.p1]) / ...
-    (norm(L1.p2-L1.p1) * norm(L2.p2-L2.p1))));
-
-% === PAIR 1: v4 (blue) and t1 (red) ===
-% Extend L1 (vertical)
-[L1_ext_start, L1_ext_end] = extend_line(L1.p1, L1.p2, extend_factor);
-plot([L1_ext_start(1), L1_ext_end(1)], [L1_ext_start(2), L1_ext_end(2)], 'b--', 'LineWidth', 2);
-plot([L1.p1(1), L1.p2(1)], [L1.p1(2), L1.p2(2)], 'b-', 'LineWidth', 4);
-
-% Extend M1 (transversal)
-[M1_ext_start, M1_ext_end] = extend_line(M1.p1, M1.p2, extend_factor);
-plot([M1_ext_start(1), M1_ext_end(1)], [M1_ext_start(2), M1_ext_end(2)], 'r--', 'LineWidth', 2);
-plot([M1.p1(1), M1.p2(1)], [M1.p1(2), M1.p2(2)], 'r-', 'LineWidth', 4);
-
-% Find intersection of Pair 1
-int1_hom = line_intersect(L1, M1);
-int1 = int1_hom(1:2) / int1_hom(3);
-angle1 = compute_angle(L1, M1);
-
-% Mark intersection and show angle
-plot(int1(1), int1(2), 'ko', 'MarkerSize', 15, 'LineWidth', 3, 'MarkerFaceColor', 'y');
-text(int1(1)+30, int1(2)-30, sprintf('Pair 1\n%.1f°', angle1), ...
-    'Color', 'k', 'FontSize', 11, 'FontWeight', 'bold', 'BackgroundColor', 'y');
-
-% Labels
-text(mean([L1.p1(1), L1.p2(1)])-50, mean([L1.p1(2), L1.p2(2)]), sprintf('v%d', v1_idx), ...
-    'Color', 'b', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
-text(mean([M1.p1(1), M1.p2(1)]), mean([M1.p1(2), M1.p2(2)])-40, sprintf('t%d', t1_idx), ...
-    'Color', 'r', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
-
-% === PAIR 2: v6 (cyan) and t6 (magenta) ===
-% Extend L2 (vertical)
-[L2_ext_start, L2_ext_end] = extend_line(L2.p1, L2.p2, extend_factor);
-plot([L2_ext_start(1), L2_ext_end(1)], [L2_ext_start(2), L2_ext_end(2)], 'c--', 'LineWidth', 2);
-plot([L2.p1(1), L2.p2(1)], [L2.p1(2), L2.p2(2)], 'c-', 'LineWidth', 4);
-
-% Extend M2 (transversal)
-[M2_ext_start, M2_ext_end] = extend_line(M2.p1, M2.p2, extend_factor);
-plot([M2_ext_start(1), M2_ext_end(1)], [M2_ext_start(2), M2_ext_end(2)], 'm--', 'LineWidth', 2);
-plot([M2.p1(1), M2.p2(1)], [M2.p1(2), M2.p2(2)], 'm-', 'LineWidth', 4);
-
-% Find intersection of Pair 2
-int2_hom = line_intersect(L2, M2);
-int2 = int2_hom(1:2) / int2_hom(3);
-angle2 = compute_angle(L2, M2);
-
-% Mark intersection and show angle
-plot(int2(1), int2(2), 'ko', 'MarkerSize', 15, 'LineWidth', 3, 'MarkerFaceColor', 'g');
-text(int2(1)+30, int2(2)-30, sprintf('Pair 2\n%.1f°', angle2), ...
-    'Color', 'k', 'FontSize', 11, 'FontWeight', 'bold', 'BackgroundColor', 'g');
-
-% Labels
-text(mean([L2.p1(1), L2.p2(1)])-50, mean([L2.p1(2), L2.p2(2)]), sprintf('v%d', v2_idx), ...
-    'Color', 'c', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
-text(mean([M2.p1(1), M2.p2(1)]), mean([M2.p1(2), M2.p2(2)])-40, sprintf('t%d', t2_idx), ...
-    'Color', 'm', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
-
-% Print angles to console
-fprintf('Pair 1 (v%d + t%d): Angle = %.2f degrees\n', v1_idx, t1_idx, angle1);
-fprintf('Pair 2 (v%d + t%d): Angle = %.2f degrees\n', v2_idx, t2_idx, angle2);
-fprintf('Note: These pairs are KNOWN to be orthogonal (90°) in the real world.\n');
-
-% Add legend
-h1 = plot(NaN, NaN, 'b-', 'LineWidth', 4);
-h2 = plot(NaN, NaN, 'r-', 'LineWidth', 4);
-h3 = plot(NaN, NaN, 'c-', 'LineWidth', 4);
-h4 = plot(NaN, NaN, 'm-', 'LineWidth', 4);
-h5 = plot(NaN, NaN, 'ko', 'MarkerSize', 10, 'MarkerFaceColor', 'y');
-legend([h1, h2, h3, h4, h5], {sprintf('v%d (Pair 1)', v1_idx), sprintf('t%d (Pair 1)', t1_idx), ...
-    sprintf('v%d (Pair 2)', v2_idx), sprintf('t%d (Pair 2)', t2_idx), 'Intersection'}, 'Location', 'best');
-
-% 2. COMPUTE METRIC RECTIFICATION
+% 2. AUTOMATIC PERMUTATION SEARCH
+% We need two pairs of orthogonal lines: (v_i, t_j) and (v_k, t_l)
+% where i != k and j != l to ensure independence.
 transform_line = @(L, H) cross((H*[L.p1, 1]')', (H*[L.p2, 1]')');
 
-% Transform to affine space
-l1_a = transform_line(L1, H_affine);
-m1_a = transform_line(M1, H_affine);
-l2_a = transform_line(L2, H_affine);
-m2_a = transform_line(M2, H_affine);
+num_v = length(lines_v);
+num_t = length(lines_trans);
 
-% Normalize lines
-l1_a = l1_a / l1_a(3); m1_a = m1_a / m1_a(3);
-l2_a = l2_a / l2_a(3); m2_a = m2_a / m2_a(3);
+fprintf('Testing all permutations of %d vertical x %d transversal lines...\n', num_v, num_t);
 
-% Build constraint matrix for S
-A_metric = [l1_a(1)*m1_a(1), (l1_a(1)*m1_a(2) + l1_a(2)*m1_a(1)), l1_a(2)*m1_a(2);
-    l2_a(1)*m2_a(1), (l2_a(1)*m2_a(2) + l2_a(2)*m2_a(1)), l2_a(2)*m2_a(2)];
+% Store results for all valid permutations
+all_results = [];
+result_idx = 0;
 
-% Check rank
-if rank(A_metric) < 2
-    warning('Selected line pairs are linearly dependent. Using VP-based fallback.');
-    H_metric = H_metric_vp;
-else
-    % Solve for S parameters
-    [~, ~, V_s] = svd(A_metric);
-    s_params = V_s(:, end);
-    S = [s_params(1), s_params(2); s_params(2), s_params(3)];
+% Precompute vanishing point constraints for calibration (these don't change)
+vps = {v_vert_pixel, v_axis_pixel, v_trans_pixel};
+vp_pairs = [1 2; 1 3; 2 3];
+A_vp = [];
+for kk = 1:size(vp_pairs, 1)
+    u_vp = vps{vp_pairs(kk, 1)};
+    v_vp = vps{vp_pairs(kk, 2)};
+    row_vp = [u_vp(1)*v_vp(1), u_vp(2)*v_vp(2), u_vp(1)*v_vp(3)+u_vp(3)*v_vp(1), u_vp(2)*v_vp(3)+u_vp(3)*v_vp(2), u_vp(3)*v_vp(3)];
+    A_vp = [A_vp; row_vp];
+end
 
-    % Ensure positive definiteness
-    if det(S) < 0 || S(1,1) < 0, S = -S; end
+% Generate all valid permutations: pick 2 distinct v lines and 2 distinct t lines
+for v1_idx = 1:num_v
+    for v2_idx = 1:num_v
+        if v2_idx == v1_idx, continue; end % Must be different v lines
 
-    if det(S) <= 0 || S(1,1) <= 0
-        warning('S matrix not positive definite. Using VP-based fallback.');
-        H_metric = H_metric_vp;
-    else
-        % Cholesky decomposition
-        L_chol = chol(S, 'lower');
-        H_metric = [inv(L_chol), [0; 0]; 0, 0, 1];
+        for t1_idx = 1:num_t
+            for t2_idx = 1:num_t
+                if t2_idx == t1_idx, continue; end % Must be different t lines
 
-        % Report results
-        cond_S = cond(S);
-        aspect_ratio = L_chol(2,2) / L_chol(1,1);
+                try
+                    % Get line structures
+                    L1 = lines_v(v1_idx);
+                    M1 = lines_trans(t1_idx);
+                    L2 = lines_v(v2_idx);
+                    M2 = lines_trans(t2_idx);
 
-        fprintf('\nMetric Rectification Results:\n');
-        fprintf('  Condition Number of S: %.4f\n', cond_S);
-        fprintf('  Aspect Ratio: %.4f\n', aspect_ratio);
-        fprintf('Metric rectification successful.\n');
+                    % Transform to affine space
+                    l1_a = transform_line(L1, H_affine);
+                    m1_a = transform_line(M1, H_affine);
+                    l2_a = transform_line(L2, H_affine);
+                    m2_a = transform_line(M2, H_affine);
+
+                    % Normalize lines
+                    l1_a = l1_a / l1_a(3); m1_a = m1_a / m1_a(3);
+                    l2_a = l2_a / l2_a(3); m2_a = m2_a / m2_a(3);
+
+                    % Build constraint matrix for S
+                    A_metric = [l1_a(1)*m1_a(1), (l1_a(1)*m1_a(2) + l1_a(2)*m1_a(1)), l1_a(2)*m1_a(2);
+                        l2_a(1)*m2_a(1), (l2_a(1)*m2_a(2) + l2_a(2)*m2_a(1)), l2_a(2)*m2_a(2)];
+
+                    % Check rank
+                    if rank(A_metric) < 2, continue; end
+
+                    % Solve for S parameters
+                    [~, ~, V_s] = svd(A_metric);
+                    s_params = V_s(:, end);
+                    S = [s_params(1), s_params(2); s_params(2), s_params(3)];
+
+                    % Ensure positive definiteness
+                    if det(S) < 0 || S(1,1) < 0, S = -S; end
+                    if det(S) <= 0 || S(1,1) <= 0, continue; end
+
+                    % Try Cholesky decomposition
+                    L_chol = chol(S, 'lower');
+                    H_metric_test = [inv(L_chol), [0; 0]; 0, 0, 1];
+
+                    % Compute quality metrics
+                    cond_S = cond(S);
+                    metric_aspect_ratio = L_chol(2,2) / L_chol(1,1);
+
+                    % === COMPUTE CAMERA CALIBRATION FOR THIS PERMUTATION ===
+                    H_rectify_test = H_metric_test * H_affine;
+                    H_world_to_img = inv(H_rectify_test);
+                    h1 = H_world_to_img(:, 1);
+                    h2 = H_world_to_img(:, 2);
+
+                    % Build IAC constraints: VP orthogonality + rectification constraints
+                    A_iac_test = A_vp;
+
+                    % Constraint: Rectified axes orthogonal (h1' * omega * h2 = 0)
+                    row_ortho = [h1(1)*h2(1), h1(2)*h2(2), h1(1)*h2(3)+h1(3)*h2(1), h1(2)*h2(3)+h1(3)*h2(2), h1(3)*h2(3)];
+                    A_iac_test = [A_iac_test; row_ortho];
+
+                    % Constraint: Equal scale (h1'*omega*h1 = h2'*omega*h2)
+                    t1_iac = [h1(1)*h1(1), h1(2)*h1(2), 2*h1(1)*h1(3), 2*h1(2)*h1(3), h1(3)*h1(3)];
+                    t2_iac = [h2(1)*h2(1), h2(2)*h2(2), 2*h2(1)*h2(3), 2*h2(2)*h2(3), h2(3)*h2(3)];
+                    A_iac_test = [A_iac_test; (t1_iac - t2_iac)];
+
+                    % Solve for omega
+                    [~, ~, V_iac] = svd(A_iac_test);
+                    x_iac = V_iac(:, end);
+                    omega_test = [x_iac(1), 0, x_iac(3); 0, x_iac(2), x_iac(4); x_iac(3), x_iac(4), x_iac(5)];
+
+                    % Force positive definiteness
+                    if det(omega_test) < 0, omega_test = -omega_test; end
+
+                    % Extract K via Cholesky
+                    C_iac = chol(omega_test, 'upper');
+                    K_test = inv(C_iac);
+                    K_test = K_test / K_test(3,3);
+                    if K_test(1,1) < 0, K_test = -K_test; end
+
+                    % Extract calibration parameters
+                    fx = K_test(1,1);
+                    fy = K_test(2,2);
+                    cam_aspect_ratio = fx / fy;
+                    pp_x = K_test(1,3);
+                    pp_y = K_test(2,3);
+
+                    % Store result
+                    result_idx = result_idx + 1;
+                    all_results(result_idx).v1 = v1_idx;
+                    all_results(result_idx).t1 = t1_idx;
+                    all_results(result_idx).v2 = v2_idx;
+                    all_results(result_idx).t2 = t2_idx;
+                    all_results(result_idx).cond_S = cond_S;
+                    all_results(result_idx).aspect_ratio = metric_aspect_ratio;
+                    all_results(result_idx).S = S;
+                    all_results(result_idx).H_metric = H_metric_test;
+                    all_results(result_idx).K = K_test;
+                    all_results(result_idx).fx = fx;
+                    all_results(result_idx).fy = fy;
+                    all_results(result_idx).cam_ar = cam_aspect_ratio;
+                    all_results(result_idx).pp_x = pp_x;
+                    all_results(result_idx).pp_y = pp_y;
+
+                catch
+                    % Skip invalid combinations
+                    continue;
+                end
+            end
+        end
     end
+end
+
+fprintf('\nFound %d valid permutations.\n', length(all_results));
+
+% 3. DISPLAY ALL RESULTS COMPARISON
+if ~isempty(all_results)
+    % Compute statistics across all permutations
+    cond_values = [all_results.cond_S];
+    aspect_values = [all_results.aspect_ratio];
+    cam_ar_values = [all_results.cam_ar];
+    fx_values = [all_results.fx];
+    fy_values = [all_results.fy];
+    pp_x_values = [all_results.pp_x];
+    pp_y_values = [all_results.pp_y];
+
+    fprintf('\n========== PERMUTATION STATISTICS ==========\n');
+    fprintf('Total valid permutations: %d\n', length(all_results));
+    fprintf('\nCondition Number Statistics:\n');
+    fprintf('  Min:    %.4f\n', min(cond_values));
+    fprintf('  Max:    %.4f\n', max(cond_values));
+    fprintf('  Mean:   %.4f\n', mean(cond_values));
+    fprintf('  Median: %.4f\n', median(cond_values));
+    fprintf('  Std:    %.4f\n', std(cond_values));
+
+    fprintf('\nMetric Aspect Ratio (from S) Statistics:\n');
+    fprintf('  Min:    %.4f\n', min(aspect_values));
+    fprintf('  Max:    %.4f\n', max(aspect_values));
+    fprintf('  Mean:   %.4f\n', mean(aspect_values));
+    fprintf('  Median: %.4f\n', median(aspect_values));
+    fprintf('  Std:    %.4f\n', std(aspect_values));
+
+    fprintf('\n========== CAMERA CALIBRATION STATISTICS ==========\n');
+    fprintf('\nCamera Aspect Ratio (fx/fy) Statistics:\n');
+    fprintf('  Min:    %.4f\n', min(cam_ar_values));
+    fprintf('  Max:    %.4f\n', max(cam_ar_values));
+    fprintf('  Mean:   %.4f\n', mean(cam_ar_values));
+    fprintf('  Median: %.4f\n', median(cam_ar_values));
+    fprintf('  Std:    %.4f\n', std(cam_ar_values));
+
+    fprintf('\nFocal Length fx Statistics:\n');
+    fprintf('  Min:    %.2f\n', min(fx_values));
+    fprintf('  Max:    %.2f\n', max(fx_values));
+    fprintf('  Mean:   %.2f\n', mean(fx_values));
+    fprintf('  Median: %.2f\n', median(fx_values));
+    fprintf('  Std:    %.2f\n', std(fx_values));
+
+    fprintf('\nFocal Length fy Statistics:\n');
+    fprintf('  Min:    %.2f\n', min(fy_values));
+    fprintf('  Max:    %.2f\n', max(fy_values));
+    fprintf('  Mean:   %.2f\n', mean(fy_values));
+    fprintf('  Median: %.2f\n', median(fy_values));
+    fprintf('  Std:    %.2f\n', std(fy_values));
+
+    fprintf('\nPrincipal Point X Statistics:\n');
+    fprintf('  Min:    %.2f\n', min(pp_x_values));
+    fprintf('  Max:    %.2f\n', max(pp_x_values));
+    fprintf('  Mean:   %.2f\n', mean(pp_x_values));
+    fprintf('  Median: %.2f\n', median(pp_x_values));
+    fprintf('  Std:    %.2f\n', std(pp_x_values));
+
+    fprintf('\nPrincipal Point Y Statistics:\n');
+    fprintf('  Min:    %.2f\n', min(pp_y_values));
+    fprintf('  Max:    %.2f\n', max(pp_y_values));
+    fprintf('  Mean:   %.2f\n', mean(pp_y_values));
+    fprintf('  Median: %.2f\n', median(pp_y_values));
+    fprintf('  Std:    %.2f\n', std(pp_y_values));
+
+    % Sort by condition number (lower is better)
+    [~, sort_idx] = sort(cond_values);
+
+    % ========== TOP 200 CAMERA CALIBRATION RESULTS ==========
+    num_to_show = min(200, length(all_results));
+    fprintf('\n========== TOP %d PERMUTATIONS: CAMERA CALIBRATION ==========\n', num_to_show);
+    fprintf('%-5s | %-14s | %-8s | %-8s | %-8s | %-10s | %-10s\n', ...
+        'Rank', 'Lines', 'fx', 'fy', 'AR(fx/fy)', 'PP_x', 'PP_y');
+    fprintf('%s\n', repmat('-', 1, 85));
+
+    for i = 1:num_to_show
+        idx = sort_idx(i);
+        r = all_results(idx);
+        line_str = sprintf('v%d-t%d,v%d-t%d', r.v1, r.t1, r.v2, r.t2);
+        fprintf('%-5d | %-14s | %-8.1f | %-8.1f | %-8.4f | %-10.2f | %-10.2f\n', ...
+            i, line_str, r.fx, r.fy, r.cam_ar, r.pp_x, r.pp_y);
+    end
+
+    % Show distribution of quality categories
+    excellent_count = sum(cond_values < 10 & abs(aspect_values - 1) < 0.3);
+    good_count = sum(cond_values < 50 & abs(aspect_values - 1) < 0.5) - excellent_count;
+    acceptable_count = sum(cond_values < 100) - excellent_count - good_count;
+    poor_count = length(all_results) - excellent_count - good_count - acceptable_count;
+
+    fprintf('\n========== QUALITY DISTRIBUTION ==========\n');
+    fprintf('Excellent:   %3d (%5.1f%%)\n', excellent_count, 100*excellent_count/length(all_results));
+    fprintf('Good:        %3d (%5.1f%%)\n', good_count, 100*good_count/length(all_results));
+    fprintf('Acceptable:  %3d (%5.1f%%)\n', acceptable_count, 100*acceptable_count/length(all_results));
+    fprintf('Poor:        %3d (%5.1f%%)\n', poor_count, 100*poor_count/length(all_results));
+
+    % Show BEST vs WORST comparison
+    fprintf('\n========== BEST vs WORST COMPARISON ==========\n');
+    best_r = all_results(sort_idx(1));
+    worst_r = all_results(sort_idx(end));
+
+    fprintf('BEST:  v%d-t%d, v%d-t%d\n', best_r.v1, best_r.t1, best_r.v2, best_r.t2);
+    fprintf('       Cond=%.4f | AR=%.4f | fx=%.1f | fy=%.1f | PP=(%.1f, %.1f)\n', ...
+        best_r.cond_S, best_r.aspect_ratio, best_r.fx, best_r.fy, best_r.pp_x, best_r.pp_y);
+    fprintf('WORST: v%d-t%d, v%d-t%d\n', worst_r.v1, worst_r.t1, worst_r.v2, worst_r.t2);
+    fprintf('       Cond=%.4f | AR=%.4f | fx=%.1f | fy=%.1f | PP=(%.1f, %.1f)\n', ...
+        worst_r.cond_S, worst_r.aspect_ratio, worst_r.fx, worst_r.fy, worst_r.pp_x, worst_r.pp_y);
+    fprintf('Ratio (worst/best cond): %.2fx\n', worst_r.cond_S / best_r.cond_S);
+
+    % 4. SELECT BEST RESULT
+    best_idx = sort_idx(1);
+    best_result = all_results(best_idx);
+    H_metric = best_result.H_metric;
+
+    fprintf('\n========== SELECTED BEST PERMUTATION ==========\n');
+    fprintf('Pair 1: v%d + t%d\n', best_result.v1, best_result.t1);
+    fprintf('Pair 2: v%d + t%d\n', best_result.v2, best_result.t2);
+    fprintf('Condition Number: %.4f\n', best_result.cond_S);
+    fprintf('Aspect Ratio: %.4f\n', best_result.aspect_ratio);
+    fprintf('Metric rectification successful (automatic selection).\n');
+
+else
+    % Fallback to VP-based method if no valid permutation found
+    warning('No valid v-t permutation found. Falling back to VP-based metric rectification.');
+    H_metric = H_metric_vp;
 end
 
 % Final combined homography
 H_rectify = H_metric * H_affine;
-
-% --- Auto-Rotation Correction ---
-% The metric rectification may produce an arbitrary orientation.
-% We rotate so that the vertical vanishing point direction becomes truly vertical.
-v_vert_rect = H_rectify * v_vert_pixel(:);
-v_vert_rect = v_vert_rect / v_vert_rect(3);  % Normalize
-
-% Compute the direction in rectified space (as a direction at infinity, use first 2 components)
-v_vert_affine = H_rectify * v_vert_pixel(:);
-vert_dir = v_vert_affine(1:2);  % Direction vector
-vert_dir = vert_dir / norm(vert_dir);
-
-% We want vertical to point "up" (i.e., along -Y in image coordinates, or [0, -1])
-target_dir = [0; -1];
-
-% Compute rotation angle to align vert_dir with target_dir
-angle = atan2(vert_dir(1)*target_dir(2) - vert_dir(2)*target_dir(1), ...
-    vert_dir(1)*target_dir(1) + vert_dir(2)*target_dir(2));
-
-% Build rotation matrix
-R_align = [cos(angle), -sin(angle), 0; ...
-    sin(angle),  cos(angle), 0; ...
-    0,           0,          1];
-
-% Apply rotation to rectification homography
-H_rectify = R_align * H_rectify;
-
-fprintf('Applied rotation correction of %.1f degrees to align vertical direction.\n', rad2deg(angle));
-
-% --- Vertical Flip Correction ---
-% Check if the image is upside-down by testing where a top point goes
-% Transform a point from the top of the original image and bottom
-top_pt = H_rectify * [cols/2; 1; 1];  % Top center of original
-bot_pt = H_rectify * [cols/2; rows; 1];  % Bottom center of original
-top_pt = top_pt(1:2) / top_pt(3);
-bot_pt = bot_pt(1:2) / bot_pt(3);
-
-% If top point has larger Y than bottom point, the image is flipped
-if top_pt(2) > bot_pt(2)
-    % Apply vertical flip (negate Y)
-    V_flip = [1, 0, 0; 0, -1, 0; 0, 0, 1];
-    H_rectify = V_flip * H_rectify;
-    fprintf('Applied vertical flip correction.\n');
-end
 
 % --- Visualization and Output Generation ---
 % In order to visualize the result properly, we need to compute the output bounds.
