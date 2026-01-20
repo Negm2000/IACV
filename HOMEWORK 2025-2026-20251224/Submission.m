@@ -885,6 +885,22 @@ for i = 1:n1-1
         end
     end
 end
+
+% If no segment intersection found, check if endpoints are close (for base nodes)
+if isempty(pt)
+    endpoints1 = [points1(1,:); points1(end,:)];
+    endpoints2 = [points2(1,:); points2(end,:)];
+
+    for e1 = 1:2
+        for e2 = 1:2
+            dist = norm(endpoints1(e1,:) - endpoints2(e2,:));
+            if dist < 100  % Tolerance in pixels for near-miss endpoints
+                pt = (endpoints1(e1,:) + endpoints2(e2,:)) / 2;
+                return;
+            end
+        end
+    end
+end
 end
 
 function lambda = intersect_ray_cylinder(ray, P_axis, axis_dir, R, lambda_ref)
