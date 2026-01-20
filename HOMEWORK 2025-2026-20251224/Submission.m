@@ -106,63 +106,283 @@ fprintf('Computed Vertical VP: (%.1f, %.1f)\n', v_vert_pixel(1), v_vert_pixel(2)
 fprintf('Computed Axis VP:     (%.1f, %.1f)\n', v_axis_pixel(1), v_axis_pixel(2));
 fprintf('Computed Trans VP:    (%.1f, %.1f)\n', v_trans_pixel(1), v_trans_pixel(2));
 
-%% Part 3: Projective and Metric Rectification
+%% Part 3a: Projective and Affine Rectification
 % This stage is dedicated to removing perspective distortion from the image.
 % By identifying the vanishing line, we can apply a transformation that maps
 % it back to infinity, effectively making parallel lines in the scene parallel
 % in the rectified image.
-fprintf('\n--- Executing Metric Rectification ---\n');
+fprintf('\n--- Part 3a: Executing Affine Rectification ---\n');
 
 % Step 1: Affine rectification.
 % We normalize the vanishing line and construct a homography that stabilizes the plane.
+% Any line on the world plane maps to the vanishing line l = [l1, l2, l3] in the image.
+% The transformation H_affine = [1 0 0; 0 1 0; l1 l2 l3] maps the vanishing line to [0 0 1].
 l = vanishing_line(:) / vanishing_line(3);
 H_affine = [1, 0, 0; 0, 1, 0; l(1), l(2), 1];
 
-% Step 2: Metric rectification.
-% Here we use the knowledge that vertical and transversal directions are
-% orthogonal in the physical world to recover the correct aspect ratio.
+% Step 2: Basic Metric rectification (via Vanishing Points).
+% In affine space, the vanishing line has been mapped to infinity.
+% The vanishing points v_vert and v_trans now represent directions.
+% Their transformed homogeneous coordinates are [x, y, 0]'.
 v_vert_affine = H_affine * v_vert_pixel(:);
 v_trans_affine = H_affine * v_trans_pixel(:);
 
-dir_vert = v_vert_affine(1:2) / norm(v_vert_affine(1:2));
-dir_trans = v_trans_affine(1:2) / norm(v_trans_affine(1:2));
+% The direction vectors are extracted from the first two components.
+u = v_vert_affine(1:2) / norm(v_vert_affine(1:2));
+v = v_trans_affine(1:2) / norm(v_trans_affine(1:2));
 
-M = [dir_vert, dir_trans];
-S_metric = [0, 1; 1, 0] * inv(M);
-H_metric = [S_metric, [0; 0]; 0, 0, 1];
+% This is a simplified metric rectification that assumes the vertical and
+% transversal directions define the new Cartesian frame.
+M = [u, v];
+S_metric_init = inv(M); % Maps u -> [1;0] and v -> [0;1]
+H_metric_vp = [S_metric_init, [0; 0]; 0, 0, 1];
 
+%% Part 3b: Metric Rectification via Independent Line Pairs
+% This method recovers the metric structure of the plane by solving for the
+% image of the dual conic C* using two pairs of orthogonal lines.
+% Hard-coded selection: Pair 1 (v4, t1) and Pair 2 (v6, t6)
+% Ref: Lecture G - Stratified Rectification from Orthogonal Lines.
+fprintf('\n--- Part 3b: Metric Rectification (Hard-coded Line Pairs) ---\n');
+
+% Hard-coded line pair indices
+v1_idx = 4;  t1_idx = 1;  % Pair 1: v4 + t1
+v2_idx = 6;  t2_idx = 6;  % Pair 2: v6 + t6
+
+fprintf('Selected Line Pairs:\n');
+fprintf('  Pair 1: v%d + t%d\n', v1_idx, t1_idx);
+fprintf('  Pair 2: v%d + t%d\n', v2_idx, t2_idx);
+
+% Get line structures
+L1 = lines_v(v1_idx);
+M1 = lines_trans(t1_idx);
+L2 = lines_v(v2_idx);
+M2 = lines_trans(t2_idx);
+
+% 1. VISUALIZE SELECTED LINE PAIRS
+figure(10);  % Use specific figure number for easy identification
+clf;  % Clear figure
+imshow(img); hold on;
+title(sprintf('Figure 10: Metric Rectification - Pair 1 (v%d+t%d), Pair 2 (v%d+t%d)', v1_idx, t1_idx, v2_idx, t2_idx), 'FontSize', 14);
+
+% Plot all features in light colors
+for i = 1:length(lines_v)
+    plot([lines_v(i).p1(1), lines_v(i).p2(1)], [lines_v(i).p1(2), lines_v(i).p2(2)], ...
+        'b-', 'LineWidth', 1, 'Color', [0.6 0.6 1]);
+    text(mean([lines_v(i).p1(1), lines_v(i).p2(1)]), mean([lines_v(i).p1(2), lines_v(i).p2(2)]), ...
+        sprintf('v%d', i), 'Color', [0.4 0.4 0.8], 'FontSize', 8);
+end
+for i = 1:length(lines_trans)
+    plot([lines_trans(i).p1(1), lines_trans(i).p2(1)], [lines_trans(i).p1(2), lines_trans(i).p2(2)], ...
+        'r-', 'LineWidth', 1, 'Color', [1 0.6 0.6]);
+    text(mean([lines_trans(i).p1(1), lines_trans(i).p2(1)]), mean([lines_trans(i).p1(2), lines_trans(i).p2(2)]), ...
+        sprintf('t%d', i), 'Color', [0.8 0.4 0.4], 'FontSize', 8);
+end
+
+% Highlight selected lines with thick bright colors AND extend them
+% Helper function to extend a line segment
+extend_factor = 3;  % Extend lines by this factor beyond their endpoints
+
+% Function to extend line endpoints
+extend_line = @(p1, p2, factor) deal(...
+    p1 - factor * (p2 - p1), ...  % Extended start
+    p2 + factor * (p2 - p1));     % Extended end
+
+% Function to compute line intersection
+line_intersect = @(L1, L2) cross(...
+    cross([L1.p1, 1], [L1.p2, 1]), ...
+    cross([L2.p1, 1], [L2.p2, 1]));
+
+% Function to compute angle between two lines at their intersection
+compute_angle = @(L1, L2) acosd(abs(...
+    dot([L1.p2-L1.p1], [L2.p2-L2.p1]) / ...
+    (norm(L1.p2-L1.p1) * norm(L2.p2-L2.p1))));
+
+% === PAIR 1: v4 (blue) and t1 (red) ===
+% Extend L1 (vertical)
+[L1_ext_start, L1_ext_end] = extend_line(L1.p1, L1.p2, extend_factor);
+plot([L1_ext_start(1), L1_ext_end(1)], [L1_ext_start(2), L1_ext_end(2)], 'b--', 'LineWidth', 2);
+plot([L1.p1(1), L1.p2(1)], [L1.p1(2), L1.p2(2)], 'b-', 'LineWidth', 4);
+
+% Extend M1 (transversal)
+[M1_ext_start, M1_ext_end] = extend_line(M1.p1, M1.p2, extend_factor);
+plot([M1_ext_start(1), M1_ext_end(1)], [M1_ext_start(2), M1_ext_end(2)], 'r--', 'LineWidth', 2);
+plot([M1.p1(1), M1.p2(1)], [M1.p1(2), M1.p2(2)], 'r-', 'LineWidth', 4);
+
+% Find intersection of Pair 1
+int1_hom = line_intersect(L1, M1);
+int1 = int1_hom(1:2) / int1_hom(3);
+angle1 = compute_angle(L1, M1);
+
+% Mark intersection and show angle
+plot(int1(1), int1(2), 'ko', 'MarkerSize', 15, 'LineWidth', 3, 'MarkerFaceColor', 'y');
+text(int1(1)+30, int1(2)-30, sprintf('Pair 1\n%.1f°', angle1), ...
+    'Color', 'k', 'FontSize', 11, 'FontWeight', 'bold', 'BackgroundColor', 'y');
+
+% Labels
+text(mean([L1.p1(1), L1.p2(1)])-50, mean([L1.p1(2), L1.p2(2)]), sprintf('v%d', v1_idx), ...
+    'Color', 'b', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
+text(mean([M1.p1(1), M1.p2(1)]), mean([M1.p1(2), M1.p2(2)])-40, sprintf('t%d', t1_idx), ...
+    'Color', 'r', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
+
+% === PAIR 2: v6 (cyan) and t6 (magenta) ===
+% Extend L2 (vertical)
+[L2_ext_start, L2_ext_end] = extend_line(L2.p1, L2.p2, extend_factor);
+plot([L2_ext_start(1), L2_ext_end(1)], [L2_ext_start(2), L2_ext_end(2)], 'c--', 'LineWidth', 2);
+plot([L2.p1(1), L2.p2(1)], [L2.p1(2), L2.p2(2)], 'c-', 'LineWidth', 4);
+
+% Extend M2 (transversal)
+[M2_ext_start, M2_ext_end] = extend_line(M2.p1, M2.p2, extend_factor);
+plot([M2_ext_start(1), M2_ext_end(1)], [M2_ext_start(2), M2_ext_end(2)], 'm--', 'LineWidth', 2);
+plot([M2.p1(1), M2.p2(1)], [M2.p1(2), M2.p2(2)], 'm-', 'LineWidth', 4);
+
+% Find intersection of Pair 2
+int2_hom = line_intersect(L2, M2);
+int2 = int2_hom(1:2) / int2_hom(3);
+angle2 = compute_angle(L2, M2);
+
+% Mark intersection and show angle
+plot(int2(1), int2(2), 'ko', 'MarkerSize', 15, 'LineWidth', 3, 'MarkerFaceColor', 'g');
+text(int2(1)+30, int2(2)-30, sprintf('Pair 2\n%.1f°', angle2), ...
+    'Color', 'k', 'FontSize', 11, 'FontWeight', 'bold', 'BackgroundColor', 'g');
+
+% Labels
+text(mean([L2.p1(1), L2.p2(1)])-50, mean([L2.p1(2), L2.p2(2)]), sprintf('v%d', v2_idx), ...
+    'Color', 'c', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
+text(mean([M2.p1(1), M2.p2(1)]), mean([M2.p1(2), M2.p2(2)])-40, sprintf('t%d', t2_idx), ...
+    'Color', 'm', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
+
+% Print angles to console
+fprintf('Pair 1 (v%d + t%d): Angle = %.2f degrees\n', v1_idx, t1_idx, angle1);
+fprintf('Pair 2 (v%d + t%d): Angle = %.2f degrees\n', v2_idx, t2_idx, angle2);
+fprintf('Note: These pairs are KNOWN to be orthogonal (90°) in the real world.\n');
+
+% Add legend
+h1 = plot(NaN, NaN, 'b-', 'LineWidth', 4);
+h2 = plot(NaN, NaN, 'r-', 'LineWidth', 4);
+h3 = plot(NaN, NaN, 'c-', 'LineWidth', 4);
+h4 = plot(NaN, NaN, 'm-', 'LineWidth', 4);
+h5 = plot(NaN, NaN, 'ko', 'MarkerSize', 10, 'MarkerFaceColor', 'y');
+legend([h1, h2, h3, h4, h5], {sprintf('v%d (Pair 1)', v1_idx), sprintf('t%d (Pair 1)', t1_idx), ...
+    sprintf('v%d (Pair 2)', v2_idx), sprintf('t%d (Pair 2)', t2_idx), 'Intersection'}, 'Location', 'best');
+
+% 2. COMPUTE METRIC RECTIFICATION
+transform_line = @(L, H) cross((H*[L.p1, 1]')', (H*[L.p2, 1]')');
+
+% Transform to affine space
+l1_a = transform_line(L1, H_affine);
+m1_a = transform_line(M1, H_affine);
+l2_a = transform_line(L2, H_affine);
+m2_a = transform_line(M2, H_affine);
+
+% Normalize lines
+l1_a = l1_a / l1_a(3); m1_a = m1_a / m1_a(3);
+l2_a = l2_a / l2_a(3); m2_a = m2_a / m2_a(3);
+
+% Build constraint matrix for S
+A_metric = [l1_a(1)*m1_a(1), (l1_a(1)*m1_a(2) + l1_a(2)*m1_a(1)), l1_a(2)*m1_a(2);
+    l2_a(1)*m2_a(1), (l2_a(1)*m2_a(2) + l2_a(2)*m2_a(1)), l2_a(2)*m2_a(2)];
+
+% Check rank
+if rank(A_metric) < 2
+    warning('Selected line pairs are linearly dependent. Using VP-based fallback.');
+    H_metric = H_metric_vp;
+else
+    % Solve for S parameters
+    [~, ~, V_s] = svd(A_metric);
+    s_params = V_s(:, end);
+    S = [s_params(1), s_params(2); s_params(2), s_params(3)];
+
+    % Ensure positive definiteness
+    if det(S) < 0 || S(1,1) < 0, S = -S; end
+
+    if det(S) <= 0 || S(1,1) <= 0
+        warning('S matrix not positive definite. Using VP-based fallback.');
+        H_metric = H_metric_vp;
+    else
+        % Cholesky decomposition
+        L_chol = chol(S, 'lower');
+        H_metric = [inv(L_chol), [0; 0]; 0, 0, 1];
+
+        % Report results
+        cond_S = cond(S);
+        aspect_ratio = L_chol(2,2) / L_chol(1,1);
+
+        fprintf('\nMetric Rectification Results:\n');
+        fprintf('  Condition Number of S: %.4f\n', cond_S);
+        fprintf('  Aspect Ratio: %.4f\n', aspect_ratio);
+        fprintf('Metric rectification successful.\n');
+    end
+end
+
+% Final combined homography
 H_rectify = H_metric * H_affine;
 
+% --- Auto-Rotation Correction ---
+% The metric rectification may produce an arbitrary orientation.
+% We rotate so that the vertical vanishing point direction becomes truly vertical.
+v_vert_rect = H_rectify * v_vert_pixel(:);
+v_vert_rect = v_vert_rect / v_vert_rect(3);  % Normalize
+
+% Compute the direction in rectified space (as a direction at infinity, use first 2 components)
+v_vert_affine = H_rectify * v_vert_pixel(:);
+vert_dir = v_vert_affine(1:2);  % Direction vector
+vert_dir = vert_dir / norm(vert_dir);
+
+% We want vertical to point "up" (i.e., along -Y in image coordinates, or [0, -1])
+target_dir = [0; -1];
+
+% Compute rotation angle to align vert_dir with target_dir
+angle = atan2(vert_dir(1)*target_dir(2) - vert_dir(2)*target_dir(1), ...
+    vert_dir(1)*target_dir(1) + vert_dir(2)*target_dir(2));
+
+% Build rotation matrix
+R_align = [cos(angle), -sin(angle), 0; ...
+    sin(angle),  cos(angle), 0; ...
+    0,           0,          1];
+
+% Apply rotation to rectification homography
+H_rectify = R_align * H_rectify;
+
+fprintf('Applied rotation correction of %.1f degrees to align vertical direction.\n', rad2deg(angle));
+
+% --- Vertical Flip Correction ---
+% Check if the image is upside-down by testing where a top point goes
+% Transform a point from the top of the original image and bottom
+top_pt = H_rectify * [cols/2; 1; 1];  % Top center of original
+bot_pt = H_rectify * [cols/2; rows; 1];  % Bottom center of original
+top_pt = top_pt(1:2) / top_pt(3);
+bot_pt = bot_pt(1:2) / bot_pt(3);
+
+% If top point has larger Y than bottom point, the image is flipped
+if top_pt(2) > bot_pt(2)
+    % Apply vertical flip (negate Y)
+    V_flip = [1, 0, 0; 0, -1, 0; 0, 0, 1];
+    H_rectify = V_flip * H_rectify;
+    fprintf('Applied vertical flip correction.\n');
+end
+
+% --- Visualization and Output Generation ---
 % In order to visualize the result properly, we need to compute the output bounds.
-% We sample a grid of points to determine where the image content maps to.
 [xx, yy] = meshgrid(linspace(1, cols, 40), linspace(1, rows, 40));
 grid_points = [xx(:), yy(:), ones(numel(xx), 1)]';
 
 grid_vals = H_affine(3, :) * grid_points;
 side = sign(mean(grid_vals));
-if side == 0
-    side = 1;
-end
+if side == 0, side = 1; end
 
 % We apply a validity mask to focus on the points that are not near the vanishing line.
 margin = 0.15 * abs(max(grid_vals) - min(grid_vals));
 valid_mask = (sign(grid_vals) == side) & (abs(grid_vals) > margin);
-if sum(valid_mask) < 10
-    valid_mask = (sign(grid_vals) == side);
-end
+if sum(valid_mask) < 10, valid_mask = (sign(grid_vals) == side); end
 
 pts_transformed = H_rectify * grid_points(:, valid_mask);
 pts_transformed = pts_transformed(1:2, :) ./ pts_transformed(3, :);
 
 % Bounding box estimation for the rectified image.
-min_x = min(pts_transformed(1, :));
-max_x = max(pts_transformed(1, :));
-min_y = min(pts_transformed(2, :));
-max_y = max(pts_transformed(2, :));
+min_x = min(pts_transformed(1, :)); max_x = max(pts_transformed(1, :));
+min_y = min(pts_transformed(2, :)); max_y = max(pts_transformed(2, :));
 
-rect_width = max_x - min_x;
-rect_height = max_y - min_y;
-
+rect_width = max_x - min_x; rect_height = max_y - min_y;
 
 % Scaling the rectified result to a standard presentation width (2000 pixels).
 target_width = 2000;
@@ -180,63 +400,110 @@ img_rectified = imwarp(img, projective2d(H_final'), 'OutputView', imref2d(output
 
 fprintf('Rectified image generated with size: %d x %d\n', output_size(2), output_size(1));
 
-%% Part 4: Camera Intrinsic Calibration
-% In this stage, we estimate the camera intrinsic matrix (K) using the property
-% of orthogonal vanishing points. This allows us to recover the focal length
-% and the principal point.
-fprintf('\n--- Computing Camera Calibration matrix K ---\n');
+%% Part 4: Camera Intrinsic Calibration (Robust IAC Method)
+% We estimate K without assuming fx=fy or centered principal point.
+% We use the Image of the Absolute Conic (omega).
+% Assumption: Zero skew (given), but unknown Aspect Ratio and Principal Point.
 
-% We establish a system of equations based on vi^T * omega * vj = 0.
-% We assume zero skew and a known principal point (centered) initially, or
-% we solve for the full IAC parametrization [w1, 0, w4; 0, w3, w5; w4, w5, 1].
+fprintf('\n--- Computing Camera Calibration matrix K (General Method) ---\n');
 
-v1 = v_vert_normalized(:);
-v2 = v_axis_normalized(:);
-v3 = v_trans_normalized(:);
+% 1. Collect Constraints
+% We define omega as symmetric with zero skew:
+% omega = [x1  0  x3]
+%         [ 0 x2  x4]
+%         [x3 x4  x5]
+% The vector of unknowns is x = [x1, x2, x3, x4, x5]'.
 
-A_calib = zeros(4, 4);
-b_calib = zeros(4, 1);
+A_iac = [];
 
-% Constraint: Vertical direction is perpendicular to the Axis direction.
-A_calib(1, :) = [v1(1)*v2(1), v1(2)*v2(2), v1(1)*v2(3)+v1(3)*v2(1), v1(2)*v2(3)+v1(3)*v2(2)];
-b_calib(1) = -v1(3)*v2(3);
+% Constraint Set A: Vanishing Points Orthogonality
+% vi' * omega * vj = 0 for orthogonal directions
+vps = {v_vert_pixel, v_axis_pixel, v_trans_pixel};
+pairs = [1 2; 1 3; 2 3]; % (Vert-Axis), (Vert-Trans), (Axis-Trans)
 
-% Constraint: Vertical direction is perpendicular to the Transversal direction.
-A_calib(2, :) = [v1(1)*v3(1), v1(2)*v3(2), v1(1)*v3(3)+v1(3)*v3(1), v1(2)*v3(3)+v1(3)*v2(2)];
-b_calib(2) = -v1(3)*v3(3);
+for k = 1:size(pairs, 1)
+    u = vps{pairs(k, 1)};
+    v = vps{pairs(k, 2)};
 
-% Constraint: Axis direction is perpendicular to the Transversal direction.
-A_calib(3, :) = [v2(1)*v3(1), v2(2)*v3(2), v2(1)*v3(3)+v2(3)*v3(1), v2(2)*v3(3)+v2(3)*v3(2)];
-b_calib(3) = -v2(3)*v3(3);
-
-% Heuristic: Assume square pixels (w1 = w3).
-A_calib(4, :) = [1, -1, 0, 0];
-b_calib(4) = 0;
-
-% Solve the linear system for the omega (IAC) parameters.
-x = A_calib \ b_calib;
-w1 = x(1); w3 = x(2); w4 = x(3); w5 = x(4);
-
-omega = [w1, 0, w4; 0, w3, w5; w4, w5, 1];
-
-% We extract K by performning a Cholesky decomposition of the IAC.
-
-L = chol(omega, 'lower');
-K_normalized = inv(L');
-K_normalized = K_normalized / K_normalized(3, 3);
-
-% Mapping back from the normalized image coordinates to pixel-space.
-K = T_norm_to_pixel * K_normalized;
-K = K / K(3, 3);
-
-% Enforce positive focal length for consistency with typical camera models.
-if K(1, 1) < 0
-    K = -K;
-    K = K / K(3, 3);
+    % Expansion of u' * omega * v = 0 with zero skew structure
+    % x1(u1v1) + x2(u2v2) + x3(u1v3+u3v1) + x4(u2v3+u3v2) + x5(u3v3) = 0
+    row = [u(1)*v(1), ...
+        u(2)*v(2), ...
+        u(1)*v(3) + u(3)*v(1), ...
+        u(2)*v(3) + u(3)*v(2), ...
+        u(3)*v(3)];
+    A_iac = [A_iac; row];
 end
 
-fprintf('Focal Parameters: fx = %.1f, fy = %.1f\n', K(1,1), K(2,2));
-fprintf('Principal Point Offset: (%.1f, %.1f)\n', K(1,3), K(2,3));
+% Constraint Set B: Scene Geometry from Rectification
+% We use the rectification homography H_rectify computed in Part 3.
+% This maps Image -> World (Metric).
+% Therefore H_inv = inv(H_rectify) maps World -> Image.
+% The columns of H_inv represent the World X and Y axes in the Image.
+H_img_to_world = H_rectify; % From your Part 3
+H_world_to_img = inv(H_img_to_world);
+
+h1 = H_world_to_img(:, 1); % Image of World X axis
+h2 = H_world_to_img(:, 2); % Image of World Y axis
+
+% Constraint 4: Rectified axes are orthogonal in 3D (h1' * omega * h2 = 0)
+u = h1; v = h2;
+row_ortho = [u(1)*v(1), ...
+    u(2)*v(2), ...
+    u(1)*v(3) + u(3)*v(1), ...
+    u(2)*v(3) + u(3)*v(2), ...
+    u(3)*v(3)];
+A_iac = [A_iac; row_ortho];
+
+% Constraint 5: Rectified axes have equal scale (h1' * omega * h1 = h2' * omega * h2)
+% Equivalent to: h1' * omega * h1 - h2' * omega * h2 = 0
+% Term 1 (h1, h1)
+t1 = [h1(1)*h1(1), h1(2)*h1(2), 2*h1(1)*h1(3), 2*h1(2)*h1(3), h1(3)*h1(3)];
+% Term 2 (h2, h2)
+t2 = [h2(1)*h2(1), h2(2)*h2(2), 2*h2(1)*h2(3), 2*h2(2)*h2(3), h2(3)*h2(3)];
+
+A_iac = [A_iac; (t1 - t2)];
+
+% 2. Solve for omega using SVD
+[~, ~, V_calib] = svd(A_iac);
+x = V_calib(:, end);
+
+% Reconstruct omega matrix
+omega = [x(1), 0,    x(3); ...
+    0,    x(2), x(4); ...
+    x(3), x(4), x(5)];
+
+% 3. Extract K using Cholesky Factorization
+% omega = inv(K * K')
+% K_inv = cholesky(omega)
+try
+    % Force positive definiteness if flip occurred during SVD
+    if det(omega) < 0
+        omega = -omega;
+    end
+
+    C = chol(omega, 'upper'); % C such that C'*C = omega
+    K = inv(C);               % K is the inverse of the Cholesky factor
+
+    % Normalize K so K(3,3) = 1
+    K = K / K(3,3);
+
+    % Ensure positive focal lengths
+    if K(1,1) < 0, K = -K; end
+
+    fprintf('Robust Calibration Successful.\n');
+    fprintf('f_x = %.2f\n', K(1,1));
+    fprintf('f_y = %.2f\n', K(2,2));
+    fprintf('Aspect Ratio = %.4f\n', K(1,1)/K(2,2));
+    fprintf('Principal Point = (%.2f, %.2f)\n', K(1,3), K(2,3));
+
+catch
+    warning('Cholesky decomposition failed. Matrix omega may not be positive definite due to feature noise.');
+    % Fallback to simplified model ONLY if math fails significantly
+    fprintf('Falling back to simplified calibration for stability.\n');
+    K = [2000, 0, cx; 0, 2000, cy; 0, 0, 1];
+end
+
 
 %% Part 5: Determination of Nodal Points
 % Nodal points are the critical intersection points of the vault's arcs.
@@ -838,4 +1105,34 @@ function line_hom = get_normalized_line(p1, p2, cx, cy, scale)
 p1_norm = [(p1(1)-cx)/scale, (p1(2)-cy)/scale, 1];
 p2_norm = [(p2(1)-cx)/scale, (p2(2)-cy)/scale, 1];
 line_hom = cross(p1_norm, p2_norm)';
+end
+
+function out = ternary(cond, a, b)
+% Simple ternary operator implementation
+if cond, out = a; else, out = b; end
+end
+
+function plot_labeled_line_set(lines, color, prefix)
+% Helper function to plot and label a set of lines
+for i = 1:length(lines)
+    plot([lines(i).p1(1), lines(i).p2(1)], [lines(i).p1(2), lines(i).p2(2)], color, 'LineWidth', 2);
+    text(mean([lines(i).p1(1), lines(i).p2(1)]), mean([lines(i).p1(2), lines(i).p2(2)]), ...
+        sprintf('%s%d', prefix, i), 'Color', color, 'FontSize', 10, 'FontWeight', 'bold');
+end
+end
+
+function line = get_line_by_idx(idx, lines_v, lines_trans, lines_axis, line_apical)
+% Local function to map a string index (e.g. 'v1', 't6') to the correct line structure.
+idx = lower(idx);
+num = str2double(idx(2:end));
+
+if startsWith(idx, 'v') || startsWith(idx, 'l')
+    line = lines_v(num);
+elseif startsWith(idx, 't')
+    line = lines_trans(num);
+elseif startsWith(idx, 'a')
+    line = lines_axis(num);
+else
+    line = line_apical;
+end
 end
