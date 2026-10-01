@@ -1,6 +1,10 @@
-% Submission.m - Integrated Architecture and Computer Vision Homework 2025-2026
-% Project Title: 3D Geometric Reconstruction of a Cylindrical Vault
-% Purpose: This script performs a full pipeline from image rectification to 3D recovery.
+% vault_reconstruction.m - Image Analysis and Computer Vision Homework 2025-2026
+% Student: Karim Negm
+% Project: 3D Geometric Reconstruction of a Cylindrical Vault
+% Description: This script performs a complete pipeline for metric 3D reconstruction
+%              of the San Maurizio church vault from a single uncalibrated image.
+%              Main stages: vanishing point estimation, stratified rectification,
+%              camera calibration, and 3D reconstruction via cylindrical constraints.
 
 clear;
 close all;
@@ -145,21 +149,9 @@ fprintf('\n--- Part 3b: Metric Rectification (Circular Assumption) ---\n');
 H_ortho = [S_metric_init, [0;0]; 0 0 1];
 H_affine_ortho = H_ortho * H_affine;
 
-% Step 1: Find nodal points from arc intersections (using helper function)
-nodal_pts_img = [];
-for i = 1:length(arcs_A)
-    for j = 1:length(arcs_B)
-        pt = find_intersection(arcs_A{i}, arcs_B{j});
-        if ~isempty(pt)
-            nodal_pts_img = [nodal_pts_img; pt];
-        end
-    end
-end
-
 % Transform nodal points to affine-orthogonal space
-nodal_pts_hom = [nodal_pts_img, ones(size(nodal_pts_img,1), 1)]';
-nodal_pts_ao = H_affine_ortho * nodal_pts_hom;
-nodal_pts_ao = (nodal_pts_ao(1:2,:) ./ nodal_pts_ao(3,:))';
+nodal_pts_ao = get_nodal_points(arcs_A, arcs_B, H_affine_ortho);
+nodal_pts_ao = nodal_pts_ao(:, 1:2);
 
 % CONSTRAINT 2: Circular Profile (fixes aspect ratio λ)
 % Identify Apex (A): Point with minimum Y
@@ -328,36 +320,19 @@ fprintf('K calibrated: fx=%.1f, fy=%.1f, pp=(%.1f,%.1f)\n', K(1,1), K(2,2), K(1,
 % Finding these points allows us to define the skeleton of the reconstruction.
 fprintf('\n--- Searching for Nodal Intersection Points ---\n');
 
-H_inv = inv(H_final);
+% Find intersections between all pairs of arcs in rectified space
+nodal_points_rect = get_nodal_points(arcs_A, arcs_B, H_final);
+
+% Transform back to original image
 nodal_points = [];
+H_inv = inv(H_final);
+for i = 1:size(nodal_points_rect, 1)
+    pt_rect = nodal_points_rect(i, 1:2);
+    pt_orig = H_inv * [pt_rect(:); 1];
+    pt_orig = pt_orig(1:2) / pt_orig(3);
 
-% Find intersections between all pairs of arcs
-for i = 1:length(arcs_A)
-    % Transform arc A to rectified space
-    pts_A = arcs_A{i};
-    pts_A_hom = [pts_A, ones(size(pts_A, 1), 1)]';
-    pts_A_rect = H_final * pts_A_hom;
-    pts_A_rect = (pts_A_rect(1:2, :) ./ pts_A_rect(3, :))';
-
-    for j = 1:length(arcs_B)
-        % Transform arc B to rectified space
-        pts_B = arcs_B{j};
-        pts_B_hom = [pts_B, ones(size(pts_B, 1), 1)]';
-        pts_B_rect = H_final * pts_B_hom;
-        pts_B_rect = (pts_B_rect(1:2, :) ./ pts_B_rect(3, :))';
-
-        % Find intersection
-        intersection_pt = find_intersection(pts_A_rect, pts_B_rect);
-
-        if ~isempty(intersection_pt)
-            % Transform back to original image
-            pt_orig = H_inv * [intersection_pt(:); 1];
-            pt_orig = pt_orig(1:2) / pt_orig(3);
-
-            if pt_orig(1) > 0 && pt_orig(2) > 0 && pt_orig(1) < 10000
-                nodal_points = [nodal_points; pt_orig', i, j];
-            end
-        end
+    if pt_orig(1) > 0 && pt_orig(2) > 0 && pt_orig(1) < 10000
+        nodal_points = [nodal_points; pt_orig', nodal_points_rect(i, 3), nodal_points_rect(i, 4)];
     end
 end
 
@@ -635,7 +610,9 @@ for i = 2:length(arcs_B)
 end
 
 % Plot nodal points (arc intersections used for λ constraint)
-h_nodal = plot(nodal_pts_img(:,1), nodal_pts_img(:,2), 'yo', 'MarkerSize', 12, ...
+nodal_pts_ao_img_hom = inv(H_affine_ortho) * [nodal_pts_ao, ones(size(nodal_pts_ao,1), 1)]';
+nodal_pts_ao_img = (nodal_pts_ao_img_hom(1:2,:) ./ nodal_pts_ao_img_hom(3,:))';
+h_nodal = plot(nodal_pts_ao_img(:,1), nodal_pts_ao_img(:,2), 'yo', 'MarkerSize', 12, ...
     'LineWidth', 2, 'MarkerFaceColor', 'y');
 
 % Create proper legend with handles
@@ -887,17 +864,42 @@ for i = 1:n1-1
 end
 
 % If no segment intersection found, check if endpoints are close (for base nodes)
-if isempty(pt)
-    endpoints1 = [points1(1,:); points1(end,:)];
-    endpoints2 = [points2(1,:); points2(end,:)];
+endpoints1 = [points1(1,:); points1(end,:)];
+endpoints2 = [points2(1,:); points2(end,:)];
 
-    for e1 = 1:2
-        for e2 = 1:2
-            dist = norm(endpoints1(e1,:) - endpoints2(e2,:));
-            if dist < 100  % Tolerance in pixels for near-miss endpoints
-                pt = (endpoints1(e1,:) + endpoints2(e2,:)) / 2;
-                return;
-            end
+for e1 = 1:2
+    for e2 = 1:2
+        dist = norm(endpoints1(e1,:) - endpoints2(e2,:));
+        if dist < 50  % Tolerance in pixels for near-miss endpoints
+            pt = (endpoints1(e1,:) + endpoints2(e2,:)) / 2;
+            return;
+        end
+    end
+end
+end
+
+function nodal_points = get_nodal_points(arcs_A, arcs_B, H)
+% Find intersection between all pairs of arcs, optionally transforming them first
+nodal_points = [];
+for i = 1:length(arcs_A)
+    pts_A = arcs_A{i};
+    if nargin > 2 && ~isempty(H)
+        pts_A_hom = [pts_A, ones(size(pts_A, 1), 1)]';
+        pts_A_rect = H * pts_A_hom;
+        pts_A = (pts_A_rect(1:2, :) ./ pts_A_rect(3, :))';
+    end
+
+    for j = 1:length(arcs_B)
+        pts_B = arcs_B{j};
+        if nargin > 2 && ~isempty(H)
+            pts_B_hom = [pts_B, ones(size(pts_B, 1), 1)]';
+            pts_B_rect = H * pts_B_hom;
+            pts_B = (pts_B_rect(1:2, :) ./ pts_B_rect(3, :))';
+        end
+
+        pt = find_intersection(pts_A, pts_B);
+        if ~isempty(pt)
+            nodal_points = [nodal_points; pt, i, j];
         end
     end
 end
