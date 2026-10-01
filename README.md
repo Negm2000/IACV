@@ -22,8 +22,8 @@ The only inputs are the photo and three facts about the scene: the vault is a cy
 
 ![Reconstructed arcs and cylinder axis](docs/figures/4_reconstruction.png)
 
-- Reconstructed distance between neighbouring apex nodes: 0.998 against a true value of 1 (0.2% error); 0.996 along the axis.
-- Spacing between arc centroids: 0.879 against 1 (12% error), the weakest part of the result.
+- The two apex nodes that set the scale come out 0.998 apart against the assumed 1. That is a consistency check of the least-squares fit, not an independent measurement.
+- The independent check is the spacing between reconstructed arc centroids: 0.879 against a true value of 1, a 12% error and the weakest part of the result.
 - Estimated calibration: fx = 1871 px, fy = 2422 px. The principal point lands near the top edge of the image, which says the single-view constraints pin it down poorly.
 - Cylinder radius 1.30 units; axis direction [0.905, 0.346, 0.246] in the camera frame.
 
