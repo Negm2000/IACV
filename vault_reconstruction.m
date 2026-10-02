@@ -5,6 +5,10 @@
 %              of the San Maurizio church vault from a single uncalibrated image.
 %              Main stages: vanishing point estimation, stratified rectification,
 %              camera calibration, and 3D reconstruction via cylindrical constraints.
+%
+% Revised after submission (October 2026): the aspect ratio of the metric rectification
+% now comes from cross-section circles built from mirrored arc pairs, the nodal points
+% are intersected in the image, and the cylinder is fitted to those cross-sections.
 
 clear;
 close all;
@@ -141,54 +145,49 @@ M = [u, v];
 S_metric_init = inv(M); % Maps u -> [1;0] and v -> [0;1]
 H_metric_vp = [S_metric_init, [0; 0]; 0, 0, 1];
 
-%% Part 3b: Stratified Metric Rectification (Circular Assumption)
+%% Part 3b: Stratified Metric Rectification (Circular Cross-Section)
 % Two constraints: (1) Orthogonality fixes skew, (2) Circular profile fixes aspect ratio.
-fprintf('\n--- Part 3b: Metric Rectification (Circular Assumption) ---\n');
+fprintf('\n--- Part 3b: Metric Rectification (Circular Cross-Section) ---\n');
 
 % CONSTRAINT 1: Orthogonality (fixes skew)
 H_ortho = [S_metric_init, [0;0]; 0 0 1];
 H_affine_ortho = H_ortho * H_affine;
 
-% Transform nodal points to affine-orthogonal space
-nodal_pts_ao = get_nodal_points(arcs_A, arcs_B, H_affine_ortho);
-nodal_pts_ao = nodal_pts_ao(:, 1:2);
+% CONSTRAINT 2: Circular cross-section (fixes aspect ratio λ)
+% Arcs a_i and b_j are mirror images in the plane pi_ij perpendicular to the axis.
+% A line through the axis vanishing point is the image of a line parallel to the axis.
+% Where it meets a_i (at p) and b_j (at q), the two 3D points are mirror images, so
+% their 3D midpoint lies in pi_ij and on the cylinder: it is a point of the circular
+% cross-section. Its image is the harmonic conjugate of the axis vanishing point with
+% respect to p and q. Each pair of arcs therefore gives the image of one cross-section
+% circle. The rectifying homography is the same for all planes perpendicular to the
+% axis, so all of these circles must become circles under the same λ.
+% Arcs that cross the vanishing line are left out: their planes pass close to the camera.
+usable_A = find(cellfun(@(a) ~crosses_line(a, vanishing_line), arcs_A));
+usable_B = find(cellfun(@(b) ~crosses_line(b, vanishing_line), arcs_B));
 
-% CONSTRAINT 2: Circular Profile (fixes aspect ratio λ)
-% Identify Apex (A): Point with minimum Y
-[~, apex_idx] = min(nodal_pts_ao(:,2));
-A = nodal_pts_ao(apex_idx,:);
-
-% Springing Level (Y_C): Use median Y of the lowest nodal points
-[~, sort_y_idx] = sort(nodal_pts_ao(:,2), 'descend');
-Y_springing = median(nodal_pts_ao(sort_y_idx(1:min(4, length(sort_y_idx))), 2));
-C = [A(1), Y_springing]; % Center on vertical through apex
-
-% Solve for λ: dist(C, A) = dist(C, S)
-lambda_estimates = [];
-for i = 1:size(nodal_pts_ao, 1)
-    if i == apex_idx, continue; end
-    S = nodal_pts_ao(i,:);
-    num = (S(1)-C(1))^2 - (A(1)-C(1))^2;
-    den = (A(2)-C(2))^2 - (S(2)-C(2))^2;
-    if abs(den) > 1e-6
-        lam_sq = num / den;
-        if lam_sq > 0.01 && lam_sq < 100
-            lambda_estimates = [lambda_estimates; sqrt(lam_sq)];
+sections = struct('i', {}, 'j', {}, 'pts', {});
+for i = usable_A(:)'
+    for j = usable_B(:)'
+        mid = mirror_midpoints(smooth_arc(arcs_A{i}), smooth_arc(arcs_B{j}), v_axis_pixel(1:2));
+        if size(mid, 1) >= 8
+            sections(end+1) = struct('i', i, 'j', j, 'pts', mid);
         end
     end
 end
+n_sec = numel(sections);
+fprintf('Cross-section circles recovered from %d mirrored arc pairs.\n', n_sec);
 
-if ~isempty(lambda_estimates)
-    best_lambda = median(lambda_estimates);
-    fprintf('λ estimates: range=[%.3f, %.3f], samples=[%s]\n', ...
-        min(lambda_estimates), max(lambda_estimates), ...
-        strjoin(arrayfun(@(x) sprintf('%.3f',x), lambda_estimates(1:min(5,end)), 'UniformOutput', false), ', '));
-    fprintf('Constraint 2 (Circular): λ = %.4f (median of %d estimates)\n', ...
-        best_lambda, length(lambda_estimates));
-else
-    best_lambda = 1.0;
-    fprintf('Constraint 2: No valid λ found, using 1.0\n');
+% In the affine-orthogonal frame (x vertical, y transversal) the circle of cross-section k is
+%   x^2 + λ^2 y^2 + a_k x + b_k y + c_k = 0,
+% with the same λ for every k. This is linear in the unknowns and solved for all k at once.
+best_lambda = fit_aspect_ratio(sections, H_affine_ortho);
+lambda_estimates = arrayfun(@(s) fit_aspect_ratio(s, H_affine_ortho), sections);
+if isnan(best_lambda)
+    error('The cross-section points do not define an ellipse.');
 end
+fprintf('λ per arc pair: range=[%.3f, %.3f]\n', min(lambda_estimates), max(lambda_estimates));
+fprintf('Constraint 2 (Circular): λ = %.4f (joint fit over %d cross-sections)\n', best_lambda, n_sec);
 
 % Construct final H_metric
 H_scale = [1, 0, 0; 0, best_lambda, 0; 0, 0, 1];
@@ -285,56 +284,55 @@ fprintf('Rectified image generated with size: %d x %d\n', output_size(2), output
 % Estimate K using the Image of the Absolute Conic (omega).
 fprintf('\n--- Computing Camera Calibration matrix K ---\n');
 
+% The equations are written in the normalized coordinates of Part 2, so that all
+% entries of the linear system have comparable size.
+T_pixel_to_norm = inv(T_norm_to_pixel);
+
 % Build constraints from vanishing point orthogonality
-vps = {v_vert_pixel, v_axis_pixel, v_trans_pixel};
+vps = {T_pixel_to_norm * v_vert_pixel(:), T_pixel_to_norm * v_axis_pixel(:), T_pixel_to_norm * v_trans_pixel(:)};
 pairs = [1 2; 1 3; 2 3];
 A_iac = [];
 for k = 1:size(pairs, 1)
-    u = vps{pairs(k,1)}; v = vps{pairs(k,2)};
-    A_iac = [A_iac; u(1)*v(1), u(2)*v(2), u(1)*v(3)+u(3)*v(1), u(2)*v(3)+u(3)*v(2), u(3)*v(3)];
+    A_iac = [A_iac; iac_row(vps{pairs(k,1)}, vps{pairs(k,2)})];
 end
 
 % Add constraints from rectification homography
-H_world_to_img = inv(H_rectify);
+H_world_to_img = T_pixel_to_norm * inv(H_rectify);
 h1 = H_world_to_img(:,1); h2 = H_world_to_img(:,2);
-A_iac = [A_iac; h1(1)*h2(1), h1(2)*h2(2), h1(1)*h2(3)+h1(3)*h2(1), h1(2)*h2(3)+h1(3)*h2(2), h1(3)*h2(3)];
-t1 = [h1(1)^2, h1(2)^2, 2*h1(1)*h1(3), 2*h1(2)*h1(3), h1(3)^2];
-t2 = [h2(1)^2, h2(2)^2, 2*h2(1)*h2(3), 2*h2(2)*h2(3), h2(3)^2];
-A_iac = [A_iac; t1-t2];
+A_iac = [A_iac; iac_row(h1, h2); iac_row(h1, h1) - iac_row(h2, h2)];
+A_iac = A_iac ./ vecnorm(A_iac, 2, 2);
 
 % Solve for omega and extract K
 [~, ~, V_calib] = svd(A_iac);
 x = V_calib(:,end);
 omega = [x(1), 0, x(3); 0, x(2), x(4); x(3), x(4), x(5)];
-if det(omega) < 0, omega = -omega; end
+if omega(1,1) < 0, omega = -omega; end
 
 C = chol(omega, 'upper');
-K = inv(C);
-K = K / K(3,3);
-if K(1,1) < 0, K = -K; end
+K_norm = inv(C);
+K_norm = K_norm / K_norm(3,3);
+K = T_norm_to_pixel * K_norm;
 
 fprintf('K calibrated: fx=%.1f, fy=%.1f, pp=(%.1f,%.1f)\n', K(1,1), K(2,2), K(1,3), K(2,3));
+
+% Cross-check that does not use the rectification: with square pixels, the three
+% orthogonal vanishing points alone fix the principal point (the orthocentre of
+% their triangle) and the focal length.
+pp_sq = ([v_axis_pixel(1:2) - v_trans_pixel(1:2); v_vert_pixel(1:2) - v_trans_pixel(1:2)] \ ...
+    [(v_axis_pixel(1:2) - v_trans_pixel(1:2)) * v_vert_pixel(1:2)'; ...
+    (v_vert_pixel(1:2) - v_trans_pixel(1:2)) * v_axis_pixel(1:2)'])';
+f_sq = sqrt(-(v_vert_pixel(1:2) - pp_sq) * (v_axis_pixel(1:2) - pp_sq)');
+fprintf('Square-pixel cross-check from the vanishing points alone: f=%.1f, pp=(%.1f,%.1f)\n', ...
+    f_sq, pp_sq(1), pp_sq(2));
 
 %% Part 5: Determination of Nodal Points
 % Nodal points are the critical intersection points of the vault's arcs.
 % Finding these points allows us to define the skeleton of the reconstruction.
 fprintf('\n--- Searching for Nodal Intersection Points ---\n');
 
-% Find intersections between all pairs of arcs in rectified space
-nodal_points_rect = get_nodal_points(arcs_A, arcs_B, H_final);
-
-% Transform back to original image
-nodal_points = [];
-H_inv = inv(H_final);
-for i = 1:size(nodal_points_rect, 1)
-    pt_rect = nodal_points_rect(i, 1:2);
-    pt_orig = H_inv * [pt_rect(:); 1];
-    pt_orig = pt_orig(1:2) / pt_orig(3);
-
-    if pt_orig(1) > 0 && pt_orig(2) > 0 && pt_orig(1) < 10000
-        nodal_points = [nodal_points; pt_orig', nodal_points_rect(i, 3), nodal_points_rect(i, 4)];
-    end
-end
+% Find intersections between all pairs of arcs, in the image. (In the rectified plane
+% the arcs that cross the vanishing line are torn apart, which creates false intersections.)
+nodal_points = get_nodal_points(arcs_A, arcs_B);
 
 fprintf('Found %d intersections\n', size(nodal_points, 1));
 
@@ -388,105 +386,69 @@ fprintf('  Transversal: [%.4f, %.4f, %.4f]\n', trans_direction);
 % Arc spacing constraint (known distance between arcs)
 d = 1;
 
-% Get apical nodes (where A_index == B_index)
+% Get apical nodes (where A_index == B_index), sorted by index
 apical_mask = nodal_points(:, 3) == nodal_points(:, 4);
-apical_nodes = nodal_points(apical_mask, :);
-non_apical_nodes = nodal_points(~apical_mask, :);
+apical_nodes = sortrows(nodal_points(apical_mask, :), 3);
+n_ap = size(apical_nodes, 1);
 
-% Sort apical nodes by index
-[~, sort_idx] = sort(apical_nodes(:, 3));
-apical_nodes = apical_nodes(sort_idx, :);
+% Compute the depths of the apical nodes via linear triangulation.
+% The apical nodes lie on one line parallel to the axis, d apart, so for node k
+%   lambda_k * ray_k - lambda_1 * ray_1 = (idx_k - idx_1) * d * axis_direction.
+% All depths are solved at once in the least-squares sense.
+rays_ap = zeros(3, n_ap);
+for k = 1:n_ap
+    ray_k = K_inv * [apical_nodes(k, 1:2), 1]';
+    rays_ap(:, k) = ray_k / norm(ray_k);
+end
 
-% Compute reference depth using two apical nodes via linear triangulation.
-% The key insight is that P2 = P1 + delta_d * axis_direction.
-% Substituting P1 = lambda1*ray1 and P2 = lambda2*ray2:
-%   lambda2 * ray2 = lambda1 * ray1 + delta_d * axis_direction
-% Rearranging: [ray1, -ray2] * [lambda1; lambda2] = -delta_d * axis_direction
-n1_2d = apical_nodes(1, 1:2);
-n2_2d = apical_nodes(2, 1:2);
+A_tri = zeros(3 * (n_ap - 1), n_ap);
+b_tri = zeros(3 * (n_ap - 1), 1);
+for k = 2:n_ap
+    eq = 3 * (k - 2) + (1:3);
+    A_tri(eq, 1) = -rays_ap(:, 1);
+    A_tri(eq, k) = rays_ap(:, k);
+    b_tri(eq) = (apical_nodes(k, 3) - apical_nodes(1, 3)) * d * axis_direction(:);
+end
+lambdas_ap = A_tri \ b_tri;
 
-ray1 = K_inv * [n1_2d, 1]';
-ray1 = ray1 / norm(ray1);
-
-ray2 = K_inv * [n2_2d, 1]';
-ray2 = ray2 / norm(ray2);
-
-idx1 = apical_nodes(1, 3);
-idx2 = apical_nodes(2, 3);
-delta_d = (idx2 - idx1) * d;
-
-% Construct the 3x2 linear system and solve using least squares.
-A_tri = [ray1(:), -ray2(:)];
-b_tri = -delta_d * axis_direction(:);
-lambdas_init = A_tri \ b_tri;
-lambda1 = lambdas_init(1);
-lambda2 = lambdas_init(2);
-
-fprintf('Triangulated depths: lambda1 = %.3f, lambda2 = %.3f\n', lambda1, lambda2);
-
-% Use lambda1 as the reference depth for subsequent calculations.
-lambda_ref = lambda1;
-a1 = dot(ray1, axis_direction);  % Needed for non-apical node depth scaling
-fprintf('Reference depth (lambda_ref): %.3f\n', lambda_ref);
+fprintf('Triangulated depths of the apical nodes: %s\n', mat2str(lambdas_ap', 4));
 
 % 3D position of the first apical node (apex reference).
-P_apex = lambda1 * ray1(:)';
+P_apex = lambdas_ap(1) * rays_ap(:, 1)';
+idx_apex = apical_nodes(1, 3);
 
+% Cylinder radius and axis from the cross-section circles of Part 3b.
+% The plane of the pair (a_i, b_j) is perpendicular to the axis at the axial coordinate
+% (i + j) / 2, in units of d and with the index shift applied to j. Intersecting the
+% camera rays of its midpoints with that plane gives 3D points of one cross-section.
+% A circle fitted to them gives the radius and a point of the axis.
+z_apex = dot(P_apex, axis_direction);
+radius_estimates = zeros(n_sec, 1);
+centers = zeros(n_sec, 2);
+for k = 1:n_sec
+    z_k = z_apex + ((sections(k).i + sections(k).j - shift) / 2 - idx_apex) * d;
+    rays = K_inv * [sections(k).pts, ones(size(sections(k).pts, 1), 1)]';
+    P_sec = (rays .* (z_k ./ (axis_direction * rays)))';
 
-% Compute cylinder radius using all non-apical nodes
-num_nodes = size(non_apical_nodes, 1);
-lambdas = zeros(num_nodes, 1);
-
-for i = 1:num_nodes
-    node_2d = non_apical_nodes(i, 1:2);
-    ray_i = K_inv * [node_2d, 1]';
-    ray_i = ray_i / norm(ray_i);
-    a_i = dot(ray_i, axis_direction);
-
-    if abs(a_i) > 1e-6
-        lambdas(i) = lambda_ref * a1 / a_i;
-    else
-        lambdas(i) = Inf;
-    end
+    % Coordinates in the cross-section plane, relative to the apex: (up, across)
+    [centers(k, :), radius_estimates(k)] = fit_circle((P_sec - P_apex) * vert_direction, ...
+        (P_sec - P_apex) * trans_direction);
 end
 
-% Outlier detection using median
-finite_lambdas = lambdas(isfinite(lambdas));
-median_lambda = median(finite_lambdas);
-mad_lambda = median(abs(finite_lambdas - median_lambda));
-threshold = max(3 * mad_lambda, 0.5 * lambda_ref);
-
-inlier_mask = abs(lambdas - median_lambda) < threshold & isfinite(lambdas);
-
-% Compute radius from all inlier nodes
-radius_estimates = [];
-for i = 1:num_nodes
-    if inlier_mask(i)
-        node_2d = non_apical_nodes(i, 1:2);
-        ray_i = K_inv * [node_2d, 1]';
-        ray_i = ray_i / norm(ray_i);
-
-        P_side = lambdas(i) * ray_i(:)';
-
-        diff = P_side - P_apex;
-        diff_perp = diff - dot(diff, axis_direction) * axis_direction;
-
-        radius_estimates = [radius_estimates; norm(diff_perp)];
-    end
-end
-
-% We estimate the cylinder radius by analyzing the distance of nodal points
-% from the apex reference point. Outliers are removed via median filtering.
 R_cylinder = median(radius_estimates);
+center = mean(centers, 1);
+fprintf('Radius per cross-section: range=[%.3f, %.3f]\n', min(radius_estimates), max(radius_estimates));
 fprintf('Estimated Cylinder Radius R: %.3f\n', R_cylinder);
+fprintf('Circle center relative to the apex: %.3f up, %.3f across\n', center(1), center(2));
 
-% Cylinder axis localization (positioning the axis below the apex).
-P_axis = P_apex - R_cylinder * vert_direction(:)';
+% Cylinder axis localization: the axis passes through the centers of the cross-sections.
+P_axis = P_apex + center(1) * vert_direction(:)' + center(2) * trans_direction(:)';
 
 % Documentation of the cylinder axis localization relative to the camera.
 fprintf('\n--- Cylinder Axis Spatial Localization ---\n');
 fprintf('The Axis passes through: [%.4f, %.4f, %.4f]\n', P_axis);
 fprintf('Axis Direction Vector:    [%.4f, %.4f, %.4f]\n', axis_direction);
+fprintf('Distance from the camera to the axis: %.3f\n', norm(P_axis - dot(P_axis, axis_direction) * axis_direction));
 
 % Reconstruct all arc points
 points_3D = {};
@@ -499,7 +461,7 @@ for i = 1:length(arcs_A)
         ray = K_inv * [arc_2d(j, :), 1]';
         ray = ray(:)' / norm(ray);
 
-        lambda = intersect_ray_cylinder(ray, P_axis, axis_direction, R_cylinder, lambda_ref);
+        lambda = intersect_ray_cylinder(ray, P_axis, axis_direction, R_cylinder);
 
         if lambda > 0 && isfinite(lambda)
             pt_3d = lambda * ray;
@@ -520,7 +482,7 @@ for i = 1:length(arcs_B)
         ray = K_inv * [arc_2d(j, :), 1]';
         ray = ray(:)' / norm(ray);
 
-        lambda = intersect_ray_cylinder(ray, P_axis, axis_direction, R_cylinder, lambda_ref);
+        lambda = intersect_ray_cylinder(ray, P_axis, axis_direction, R_cylinder);
 
         if lambda > 0 && isfinite(lambda)
             pt_3d = lambda * ray;
@@ -534,19 +496,41 @@ for i = 1:length(arcs_B)
 end
 
 % Verify reconstruction
-centroid1 = mean(points_3D{1}.pts, 1);
-centroid2 = mean(points_3D{2}.pts, 1);
-measured_spacing = abs(dot(centroid2 - centroid1, axis_direction));
-
 fprintf('\n%d arcs reconstructed\n', length(points_3D));
-fprintf('Arc spacing verification: %.3f (target: 1.0)\n', measured_spacing);
 
-% Verify apical node distance using triangulated depths.
-P1_apical = lambda1 * ray1(:)';
-P2_apical = lambda2 * ray2(:)';
-apical_distance = norm(P2_apical - P1_apical);
-apical_axis_dist = abs(dot(P2_apical - P1_apical, axis_direction));
-fprintf('Apical node 3D distance: %.3f (along axis: %.3f, target: %.1f)\n', apical_distance, apical_axis_dist, abs(delta_d));
+% (1) Spacing of neighbouring arcs of one family, measured along the axis at equal
+%     angle around the cylinder. Target: d.
+spacings = [];
+for family = 'AB'
+    members = find(cellfun(@(s) s.arc == family, points_3D));
+    for k = 1:numel(members) - 1
+        [z1, th1] = cylinder_coords(points_3D{members(k)}.pts, P_axis, axis_direction, vert_direction, trans_direction);
+        [z2, th2] = cylinder_coords(points_3D{members(k+1)}.pts, P_axis, axis_direction, vert_direction, trans_direction);
+        th_lo = max(min(th1), min(th2));
+        th_hi = min(max(th1), max(th2));
+        if th_hi - th_lo < 0.1, continue; end
+        th = linspace(th_lo, th_hi, 20);
+        [th1, o1] = unique(th1);
+        [th2, o2] = unique(th2);
+        spacings(end+1) = mean(interp1(th2, z2(o2), th) - interp1(th1, z1(o1), th));
+    end
+end
+measured_spacing = mean(spacings);
+fprintf('Arc spacing verification: mean %.3f, range [%.3f, %.3f] (target: %.1f)\n', ...
+    measured_spacing, min(spacings), max(spacings), d);
+
+% (2) Reprojection of the apex line: stepping from the first apical node along the axis
+%     by the node spacing must land on the other apical nodes in the image.
+reproj_err = zeros(n_ap, 1);
+for k = 1:n_ap
+    X = P_apex + (apical_nodes(k, 3) - idx_apex) * d * axis_direction;
+    x = K * X';
+    reproj_err(k) = norm(x(1:2)' / x(3) - apical_nodes(k, 1:2));
+end
+fprintf('Apical node reprojection error: %s px\n', mat2str(reproj_err', 3));
+
+% (3) The apex must lie on the fitted circle: its distance from the axis against R.
+fprintf('Apex distance from the axis: %.3f (R = %.3f)\n', norm(center), R_cylinder);
 
 
 % Print 3D coordinates of a dozen points from one arc (requirement 5)
@@ -609,10 +593,8 @@ for i = 2:length(arcs_B)
     plot(arcs_B{i}(:,1), arcs_B{i}(:,2), 'm.-', 'MarkerSize', 8);
 end
 
-% Plot nodal points (arc intersections used for λ constraint)
-nodal_pts_ao_img_hom = inv(H_affine_ortho) * [nodal_pts_ao, ones(size(nodal_pts_ao,1), 1)]';
-nodal_pts_ao_img = (nodal_pts_ao_img_hom(1:2,:) ./ nodal_pts_ao_img_hom(3,:))';
-h_nodal = plot(nodal_pts_ao_img(:,1), nodal_pts_ao_img(:,2), 'yo', 'MarkerSize', 12, ...
+% Plot nodal points (arc intersections)
+h_nodal = plot(nodal_points(:,1), nodal_points(:,2), 'yo', 'MarkerSize', 12, ...
     'LineWidth', 2, 'MarkerFaceColor', 'y');
 
 % Create proper legend with handles
@@ -817,6 +799,38 @@ end
 
 sgtitle('Figure 6: Single Diagonal Arc (A1) - Different Views');
 
+% Figure 7: the fitted cylinder projected back onto the photo
+figure(7);
+imshow(img);
+title('Figure 7: Fitted Cylinder Projected onto the Image');
+hold on;
+
+z_axis_apex = dot(P_apex - P_axis, axis_direction);
+theta = linspace(-115, 115, 300)' * pi / 180;
+for step = -1:0.5:4
+    % Cross-section of the cylinder at "step" node spacings from the first apical node
+    section_center = P_axis + (z_axis_apex + step * d) * axis_direction;
+    X = section_center + R_cylinder * (cos(theta) * vert_direction(:)' + sin(theta) * trans_direction(:)');
+    x = project_points(K, X, cols, rows);
+    if mod(step, 1) == 0
+        plot(x(:,1), x(:,2), 'w-', 'LineWidth', 1.5);
+    else
+        plot(x(:,1), x(:,2), 'w-', 'LineWidth', 0.5);
+    end
+end
+
+% Top line of the cylinder
+t = linspace(-1.5, 5, 200)';
+X = P_axis + (z_axis_apex + t * d) * axis_direction + R_cylinder * vert_direction(:)';
+x = project_points(K, X, cols, rows);
+h_top = plot(x(:,1), x(:,2), 'y-', 'LineWidth', 1.5);
+
+h_nodes = plot(nodal_points(:,1), nodal_points(:,2), 'yo', 'MarkerSize', 10, 'LineWidth', 1.5);
+h_sec = plot(NaN, NaN, 'w-', 'LineWidth', 1.5);
+lgd = legend([h_sec, h_top, h_nodes], {'Cylinder cross-sections', 'Top line of the cylinder', 'Nodal points'}, ...
+    'Location', 'southwest');
+set(lgd, 'Color', [0.2 0.2 0.2], 'TextColor', 'w');
+
 %% Part 8: Termination and Cleanup
 fprintf('\n--- Completed Successfully ---\n');
 
@@ -905,9 +919,10 @@ for i = 1:length(arcs_A)
 end
 end
 
-function lambda = intersect_ray_cylinder(ray, P_axis, axis_dir, R, lambda_ref)
+function lambda = intersect_ray_cylinder(ray, P_axis, axis_dir, R)
 % Find intersection of ray with cylinder
 % Solves: ||cross(lambda*ray - P_axis, axis_dir)|| = R
+% Returns NaN if the ray misses the cylinder.
 
 ray = ray(:)';
 P_axis = P_axis(:)';
@@ -923,24 +938,13 @@ C = dot(v, v) - R^2;
 discriminant = B^2 - 4*A*C;
 
 if discriminant < 0 || A < 1e-10
-    lambda = lambda_ref;
+    lambda = NaN;
     return;
 end
 
-sqrt_disc = sqrt(discriminant);
-lambda1 = (-B + sqrt_disc) / (2*A);
-lambda2 = (-B - sqrt_disc) / (2*A);
-
-% Choose positive solution closest to reference
-candidates = [lambda1, lambda2];
-candidates = candidates(candidates > 0);
-
-if isempty(candidates)
-    lambda = lambda_ref;
-else
-    [~, idx] = min(abs(candidates - lambda_ref));
-    lambda = candidates(idx);
-end
+% The camera is outside the cylinder and looks at the vault from below: the ray
+% enters through the open lower half, so the vault is the farther intersection.
+lambda = (-B + sqrt(discriminant)) / (2*A);
 end
 
 function line_hom = get_normalized_line(p1, p2, cx, cy, scale)
@@ -948,4 +952,100 @@ function line_hom = get_normalized_line(p1, p2, cx, cy, scale)
 p1_norm = [(p1(1)-cx)/scale, (p1(2)-cy)/scale, 1];
 p2_norm = [(p2(1)-cx)/scale, (p2(2)-cy)/scale, 1];
 line_hom = cross(p1_norm, p2_norm)';
+end
+
+function tf = crosses_line(points, l)
+% True if the polyline has points on both sides of the homogeneous line l.
+s = [points, ones(size(points, 1), 1)] * l(:);
+tf = any(s > 0) && any(s < 0);
+end
+
+function pts = smooth_arc(points)
+% Smooths the picked points of an arc with a degree-4 polynomial in chord length
+% and resamples it densely.
+s = [0; cumsum(sqrt(sum(diff(points).^2, 2)))];
+s = s / s(end);
+t = linspace(0, 1, 160)';
+pts = [polyval(polyfit(s, points(:,1), 4), t), polyval(polyfit(s, points(:,2), 4), t)];
+end
+
+function mid = mirror_midpoints(arc_a, arc_b, vp)
+% For every point p of arc_a, the line through p and the vanishing point vp is
+% intersected with arc_b at q. Returns the image of the 3D midpoint of the two
+% points, which is the harmonic conjugate of vp with respect to p and q.
+mid = [];
+for i = 1:size(arc_a, 1)
+    p = arc_a(i, :);
+    dir_p = vp - p;
+    for j = 1:size(arc_b, 1) - 1
+        b1 = arc_b(j, :);
+        dir_b = arc_b(j+1, :) - b1;
+        denom = dir_p(1)*dir_b(2) - dir_p(2)*dir_b(1);
+        if abs(denom) < 1e-12, continue; end
+        s = ((b1(1)-p(1))*dir_p(2) - (b1(2)-p(2))*dir_p(1)) / denom;
+        if s < 0 || s > 1, continue; end
+        q = b1 + s * dir_b;
+
+        pq = q - p;
+        t_vp = dot(vp - p, pq) / dot(pq, pq);
+        mid = [mid; p + t_vp / (2*t_vp - 1) * pq];
+    end
+end
+end
+
+function lambda = fit_aspect_ratio(sections, H)
+% Joint least-squares fit of x^2 + lambda^2 y^2 + a_k x + b_k y + c_k = 0 over all
+% cross-sections, after mapping their points with H. Returns NaN if no ellipse fits.
+n = numel(sections);
+A = [];
+for k = 1:n
+    p = [sections(k).pts, ones(size(sections(k).pts, 1), 1)] * H';
+    p = p(:, 1:2) ./ p(:, 3);
+    rows_k = zeros(size(p, 1), 2 + 3*n);
+    rows_k(:, 1:2) = p.^2;
+    rows_k(:, 2 + 3*(k-1) + (1:3)) = [p, ones(size(p, 1), 1)];
+    A = [A; rows_k];
+end
+col_scale = vecnorm(A);
+[~, ~, V] = svd(A ./ col_scale, 'econ');
+sol = V(:, end) ./ col_scale(:);
+if sol(2) / sol(1) > 0
+    lambda = sqrt(sol(2) / sol(1));
+else
+    lambda = NaN;
+end
+end
+
+function row = iac_row(u, v)
+% Coefficients of u' * omega * v for the zero-skew omega = [w1 0 w3; 0 w2 w4; w3 w4 w5].
+row = [u(1)*v(1), u(2)*v(2), u(1)*v(3) + u(3)*v(1), u(2)*v(3) + u(3)*v(2), u(3)*v(3)];
+end
+
+function [center, radius] = fit_circle(x, y)
+% Circle fit: algebraic start, then Gauss-Newton on the geometric distance.
+abc = [x, y, ones(size(x))] \ -(x.^2 + y.^2);
+p = [-abc(1)/2; -abc(2)/2; sqrt(abc(1)^2/4 + abc(2)^2/4 - abc(3))];
+for iter = 1:20
+    r = sqrt((x - p(1)).^2 + (y - p(2)).^2);
+    J = [-(x - p(1)) ./ r, -(y - p(2)) ./ r, -ones(size(x))];
+    p = p - J \ (r - p(3));
+end
+center = p(1:2)';
+radius = p(3);
+end
+
+function [z, theta] = cylinder_coords(points, P_axis, axis_dir, vert_dir, trans_dir)
+% Axial coordinate and angle around the axis (zero at the top) of 3D points.
+rel = points - P_axis(:)';
+z = rel * axis_dir(:);
+theta = atan2(rel * trans_dir(:), rel * vert_dir(:));
+end
+
+function x = project_points(K, X, cols, rows)
+% Projects 3D points (rows of X) to pixels. Points behind the camera or outside
+% the image become NaN so that plotted curves break there.
+x_hom = (K * X')';
+x = x_hom(:, 1:2) ./ x_hom(:, 3);
+outside = x_hom(:, 3) <= 0 | x(:,1) < 1 | x(:,1) > cols | x(:,2) < 1 | x(:,2) > rows;
+x(outside, :) = NaN;
 end
